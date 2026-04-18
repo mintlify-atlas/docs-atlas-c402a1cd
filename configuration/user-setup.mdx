@@ -1,0 +1,95 @@
+---
+title: "Assign VOIP credentials to Odoo users for calling"
+description: "Assign a PBX server, SIP username, and password to each Odoo user for VoIP — configurable by admins or by users themselves in their Preferences."
+---
+
+Each Odoo user that needs VoIP access requires three pieces of configuration on their `res.users` record: a link to a PBX server, a SIP username, and a SIP password. These can be set by an administrator or by the user themselves.
+
+## Two ways to configure credentials
+
+<CardGroup cols={2}>
+  <Card title="Admin configuration" icon="shield">
+    Navigate to **Settings → Users & Companies → Users**, open the user record, and go to the **VOIP** tab. This approach lets you configure credentials for any user in the system.
+  </Card>
+  <Card title="User self-service" icon="user">
+    Each user can open their own **Preferences** (top-right avatar menu → Preferences) and fill in the **VOIP** tab. Only their own record is accessible this way.
+  </Card>
+</CardGroup>
+
+## VOIP fields on `res.users`
+
+| Field | Technical name | Type | Description |
+|---|---|---|---|
+| PBX server | `voip_pbx_id` | Many2one → `voip.pbx` | The PBX server record this user connects to. |
+| SIP username | `voip_username` | Char | The SIP account identifier (typically a phone extension or full SIP URI). |
+| SIP password | `voip_password` | Char | The SIP account password used to register with the PBX. |
+
+All three fields are included in `SELF_READABLE_FIELDS` and `SELF_WRITEABLE_FIELDS`, so users can read and update their own credentials without needing administrator access.
+
+## What happens at login
+
+When a user logs in, Odoo calls `_voip_get_info()` on their user record. This method packages the PBX credentials into the session and determines the effective connection mode:
+
+```python
+def _voip_get_info(self):
+    return {
+        "pbx_id": self.voip_pbx_id.id,
+        "pbx": self.voip_pbx_id.name,
+        "pbx_domain": self.voip_pbx_id.domain,
+        "pbx_ws": self.voip_pbx_id.ws_server,
+        "mode": (
+            self.voip_username and self.voip_password and self.voip_pbx_id.mode
+        )
+        or "test",
+        "pbx_username": self.voip_username,
+        "pbx_password": self.voip_password,
+        "tones": {
+            "dialtone": "/voip_oca/static/audio/dialtone.mp3",
+            "calltone": "/voip_oca/static/audio/calltone.mp3",
+            "ringbacktone": "/voip_oca/static/audio/ringbacktone.mp3",
+        },
+    }
+```
+
+The session data is used by the browser-side SIP.js client to register with the PBX immediately after page load.
+
+## Effective mode logic
+
+The mode sent to the browser is determined as follows:
+
+| `voip_username` set | `voip_password` set | PBX `mode` | Effective mode |
+|---|---|---|---|
+| Yes | Yes | `prod` | `prod` — real SIP connection made |
+| Yes | Yes | `test` | `test` — no SIP connection |
+| No | — | any | `test` — no SIP connection |
+| — | No | any | `test` — no SIP connection |
+
+<Note>
+  If either `voip_username` or `voip_password` is empty, Odoo always falls back to test mode regardless of the PBX server's environment setting. No SIP registration attempt is made and no SIP.js libraries are loaded.
+</Note>
+
+## Step-by-step: configure credentials as an admin
+
+<Steps>
+  <Step title="Open the user record">
+    Go to **Settings → Users & Companies → Users** and click the user you want to configure.
+  </Step>
+  <Step title="Open the VOIP tab">
+    Select the **VOIP** tab on the user form.
+  </Step>
+  <Step title="Select a PBX server">
+    In the **PBX server** field, choose the `voip.pbx` record that corresponds to this user's telephony provider. If no record exists yet, create one first — see [Configure PBX server for Odoo VOIP](/configuration/pbx-setup).
+  </Step>
+  <Step title="Enter SIP credentials">
+    Fill in the **SIP username** and **SIP password** exactly as provided by your telephony administrator or provider portal.
+  </Step>
+  <Step title="Save">
+    Click **Save**. The credentials take effect at the user's next login.
+  </Step>
+</Steps>
+
+## Limitations
+
+<Warning>
+  Configuring two PBX server records for a single user is not supported. Only one `voip_pbx_id` can be set per user record, and per-company VoIP configuration is not supported. If your deployment uses multiple companies, all VoIP connections for a given user go through the same PBX.
+</Warning>

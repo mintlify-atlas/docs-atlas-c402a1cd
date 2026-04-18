@@ -1,0 +1,121 @@
+---
+title: "Install base_phone and voip_oca in Odoo 18"
+description: "Step-by-step instructions to install base_phone and voip_oca modules in Odoo 18, including Python dependencies and Odoo app installation."
+---
+
+## Prerequisites
+
+Before installing, confirm the following are in place:
+
+- **Odoo 18.0** — these modules are not compatible with earlier or later series.
+- **Python `phonenumbers` library** — required by `base_phone` for E.164 phone number parsing and formatting. Listed in the repository's `requirements.txt`.
+- **A WebRTC-capable PBX server** — required only for `voip_oca`. Your PBX must expose a WebSocket SIP endpoint (RFC 7118). This can be a hosted provider such as Zerovoz or Ringover, or a self-hosted PBX such as Asterisk or FreeSWITCH with a WebSocket transport configured.
+
+<Info>
+  If you only need phone number validation and formatting, you can install `base_phone` alone without any PBX server. `voip_oca` is only needed for the softphone widget and calling features.
+</Info>
+
+## Module dependency overview
+
+| Module | Odoo dependencies | Python dependencies |
+|---|---|---|
+| `base_phone` | `phone_validation`, `base_setup` | `phonenumbers` |
+| `voip_oca` | `mail` | none |
+
+`base_phone` does **not** depend on `voip_oca`, and `voip_oca` does **not** depend on `base_phone`. They are independent modules that complement each other. Install `base_phone` first if you want phone validation active before enabling the softphone.
+
+<Warning>
+  `voip_oca` declares `"excludes": ["voip"]` in its manifest, meaning it is incompatible with Odoo's built-in `voip` module. If you have the official `voip` module installed, remove it before installing `voip_oca`.
+</Warning>
+
+## Installation steps
+
+<Steps>
+  <Step title="Get the source code">
+    Clone the repository or download the release archive from GitHub. You need the branch that matches your Odoo version.
+
+    ```bash
+    git clone https://github.com/OCA/connector-telephony.git \
+      --branch 18.0 \
+      --single-branch
+    ```
+
+    This creates a `connector-telephony/` directory containing both `base_phone/` and `voip_oca/`.
+  </Step>
+
+  <Step title="Add modules to your addons path">
+    Edit your Odoo configuration file (typically `odoo.conf`) and add the cloned directory to `addons_path`.
+
+    ```ini
+    [options]
+    addons_path = /path/to/odoo/addons,/path/to/connector-telephony
+    ```
+
+    Restart Odoo after changing the configuration file.
+
+    ```bash
+    systemctl restart odoo
+    # or, if running manually:
+    python odoo-bin -c odoo.conf
+    ```
+  </Step>
+
+  <Step title="Install the phonenumbers Python library">
+    Install the required Python dependency into the same virtual environment or system Python that Odoo uses.
+
+    ```bash
+    pip install phonenumbers
+    ```
+
+    You can also install all dependencies listed in the repository's `requirements.txt`:
+
+    ```bash
+    pip install -r /path/to/connector-telephony/requirements.txt
+    ```
+
+    <Tip>
+      If you use a virtual environment for Odoo, activate it first: `source /path/to/venv/bin/activate`.
+    </Tip>
+  </Step>
+
+  <Step title="Enable developer mode in Odoo">
+    Developer mode is required to access the **Technical** menu where PBX servers are configured (needed later for `voip_oca`).
+
+    1. Open Odoo in your browser.
+    2. Go to **Settings**.
+    3. Scroll to the bottom of the page and click **Activate the developer mode**.
+
+    Alternatively, append `?debug=1` to any Odoo URL.
+  </Step>
+
+  <Step title="Install base_phone from the Apps menu">
+    1. Go to **Apps** in the top menu.
+    2. Click **Update Apps List** if the module does not appear (requires developer mode).
+    3. Search for `base_phone` or **Base Phone**.
+    4. Click **Install**.
+
+    Odoo installs `base_phone` along with its Odoo dependencies (`phone_validation` and `base_setup`).
+  </Step>
+
+  <Step title="Install voip_oca from the Apps menu">
+    If you need the softphone widget and calling functionality:
+
+    1. Stay in **Apps**.
+    2. Search for `voip_oca` or **Voip OCA**.
+    3. Click **Install**.
+
+    Odoo installs `voip_oca` along with its dependency (`mail`). The softphone button appears in the top bar immediately after installation.
+  </Step>
+</Steps>
+
+## Try it online with Runboat
+
+If you want to evaluate these modules before installing them locally, the OCA provides Runboat — a service that spins up a temporary Odoo instance with the module pre-installed.
+
+<Tip>
+  Visit [Runboat](https://runboat.odoo-community.org/builds?repo=OCA/connector-telephony&target_branch=18.0) and request a build for `OCA/connector-telephony` on branch `18.0`. The instance is ready in a few minutes and requires no local setup.
+</Tip>
+
+## Next steps
+
+Once both modules are installed, proceed to the [Quickstart](/quickstart) to configure your PBX server and make your first call.

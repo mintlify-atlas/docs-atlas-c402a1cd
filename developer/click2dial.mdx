@@ -1,0 +1,191 @@
+---
+title: "Override click2dial to build a custom IPBX connector"
+description: "Override click2dial and convert_to_dial_number in phone.common to connect a third-party PBX or IPBX API to Odoo's click-to-dial phone field feature."
+---
+
+`phone.common` exposes two overridable methods that together handle number transformation and call initiation. The base module provides a minimal implementation designed to be replaced by IPBX-specific modules.
+
+## Default behavior
+
+By default, `click2dial` is a pass-through — it returns the E.164 number stored in Odoo unchanged:
+
+```python
+@api.model
+def click2dial(self, erp_number):
+    """This function is designed to be overridden in IPBX-specific
+    modules, such as asterisk_click2dial or ovh_telephony_connector"""
+    return {"dialed_number": erp_number}
+```
+
+The return value is a dictionary. The `dialed_number` key is required; your override can add additional keys to pass state back to the JavaScript caller.
+
+## The two extension points
+
+<CardGroup cols={2}>
+  <Card title="click2dial" icon="phone">
+    Override this to add PBX-specific dial logic — for example, initiating a call via the Asterisk Manager Interface (AMI) or a REST API. Receives the raw Odoo number; returns a dict with at minimum `{"dialed_number": ...}`.
+  </Card>
+  <Card title="convert_to_dial_number" icon="arrows-left-right">
+    Override this to reformat numbers before they are dialed. Useful when your PBX expects a different format than E.164 — for example, stripping the country code for internal extensions or prepending a trunk prefix.
+  </Card>
+</CardGroup>
+
+## `convert_to_dial_number`
+
+This method reformats an E.164 number into the format your phone system expects. The base implementation uses `phonenumbers.format_out_of_country_calling_number` with the company's country code, then strips spaces, dashes, dots, parentheses, and slashes:
+
+```python
+@api.model
+def convert_to_dial_number(self, erp_number):
+    assert erp_number, "Missing phone number"
+    parsed_num = phonenumbers.parse(erp_number, None)
+    country_code = self.env.company.country_id.code
+    assert country_code, "Missing country on company"
+    to_dial_number = phonenumbers.format_out_of_country_calling_number(
+        parsed_num, country_code.upper()
+    )
+    to_dial_number = to_dial_number.translate(
+        to_dial_number.maketrans("", "", " -.()/")
+    )
+    return to_dial_number
+```
+
+For a French company (country code `FR`) dialing `+33 4 78 99 88 77`, this produces `0478998877`. Dialing `+32 455 78 99 88` (a Belgian number from France) produces `0032455789988`.
+
+<Tip>
+  Override `convert_to_dial_number` for pure number transformation — stripping country codes, adding trunk prefixes, mapping extensions. Override `click2dial` for PBX-specific logic like API calls or AMI commands that actually trigger the dial.
+</Tip>
+
+## Overriding `click2dial`
+
+Create a new module that depends on `base_phone` and inherits `phone.common`.
+
+### Module structure
+
+```
+my_pbx_connector/
+├── __manifest__.py
+├── __init__.py
+└── models/
+    ├── __init__.py
+    └── phone_common.py
+```
+
+### `__manifest__.py`
+
+```python
+{
+    "name": "My PBX Connector",
+    "version": "18.0.1.0.0",
+    "depends": ["base_phone"],
+    "license": "AGPL-3",
+}
+```
+
+### Override `click2dial`
+
+```python
+# my_pbx_connector/models/phone_common.py
+import logging
+import requests
+
+from odoo import api, models
+
+_logger = logging.getLogger(__name__)
+
+
+class PhoneCommon(models.AbstractModel):
+    _inherit = "phone.common"
+
+    @api.model
+    def click2dial(self, erp_number):
+        # Transform the number for your PBX
+        dial_number = self.convert_to_dial_number(erp_number)
+
+        # Initiate the call via your PBX API
+        company = self.env.company
+        pbx_url = company.my_pbx_url  # custom field on res.company
+        pbx_token = company.my_pbx_token
+
+        try:
+            response = requests.post(
+                f"{pbx_url}/api/dial",
+                json={"number": dial_number},
+                headers={"Authorization": f"Bearer {pbx_token}"},
+                timeout=10,
+            )
+            response.raise_for_status()
+        except requests.RequestException as e:
+            _logger.error("PBX dial request failed: %s", e)
+            raise
+
+        return {"dialed_number": dial_number}
+```
+
+<Warning>
+  Always call `super()` unless you intentionally replace the entire behavior. Omitting `super()` means any other module in the chain that also inherits `phone.common` will be silently bypassed.
+</Warning>
+
+### Override `convert_to_dial_number`
+
+If your PBX requires a specific format — for example, all internal calls as 4-digit extensions with no country prefix — override `convert_to_dial_number` instead of (or in addition to) `click2dial`:
+
+```python
+@api.model
+def convert_to_dial_number(self, erp_number):
+    # For internal extensions: strip everything and take last 4 digits
+    # Fall back to base behavior for external numbers
+    import phonenumbers
+
+    parsed = phonenumbers.parse(erp_number, None)
+    national = phonenumbers.format_number(
+        parsed, phonenumbers.PhoneNumberFormat.NATIONAL
+    )
+    # Strip all non-digits
+    digits_only = "".join(c for c in national if c.isdigit())
+
+    # Internal extension range: 1000–1999
+    if len(digits_only) == 4 and digits_only.startswith("1"):
+        return digits_only
+
+    # Fall through to base behavior for external numbers
+    return super().convert_to_dial_number(erp_number)
+```
+
+## Real-world reference: `asterisk_click2dial`
+
+The [`asterisk_click2dial`](https://github.com/OCA/asterisk-addons) module from the OCA `asterisk-addons` repository is an example of this pattern in production. It overrides `click2dial` to originate calls via the Asterisk Manager Interface (AMI), using the SIP extension and caller ID configured on the Odoo user's profile.
+
+<Note>
+  `asterisk_click2dial` is maintained in the separate [OCA/asterisk-addons](https://github.com/OCA/asterisk-addons) repository, not in `connector-telephony`. It depends on `base_phone` from this repository.
+</Note>
+
+<AccordionGroup>
+  <Accordion title="How asterisk_click2dial uses this pattern">
+    `asterisk_click2dial` inherits `phone.common` and overrides `click2dial` to:
+
+    1. Call `convert_to_dial_number` to reformat the number.
+    2. Look up the SIP extension configured on the current Odoo user (`res.users`).
+    3. Open a socket connection to the Asterisk AMI.
+    4. Send an `Originate` AMI action to connect the user's SIP phone to the destination number.
+    5. Return `{"dialed_number": dial_number}` on success.
+
+    This is the reference implementation to study when building your own connector.
+  </Accordion>
+</AccordionGroup>
+
+## Return value contract
+
+`click2dial` must return a dictionary. The JavaScript front-end reads the `dialed_number` key to display the number that was dialed. You may include additional keys — they are ignored by the base front-end but available to any custom JavaScript you add.
+
+```python
+# Minimum valid return value
+return {"dialed_number": dial_number}
+
+# Extended return value (extra keys are ignored by base JS)
+return {
+    "dialed_number": dial_number,
+    "call_id": "abc-123",
+    "channel": "SIP/1001",
+}
+```

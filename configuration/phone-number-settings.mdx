@@ -1,0 +1,124 @@
+---
+title: "Phone number formatting, caller ID, and bulk reformat"
+description: "Configure how Odoo reformats phone numbers to international standard, set the digits-to-match-from-end for caller ID, and bulk-reformat all existing records."
+---
+
+The `base_phone` module adds automatic phone number reformatting and a caller ID lookup mechanism to Odoo. Both features rely on the `phonenumbers` Python library and on the country configured on your company.
+
+## How phone number reformatting works
+
+When a phone or mobile number is saved on a record that inherits from `phone.validation.mixin` (such as `res.partner`), Odoo calls `phone_format()` on the value. This method uses Odoo's built-in `phone_validation` tools to normalize the number to **international format** (equivalent to E.164 with spaces, e.g. `+33 1 55 42 12 42`).
+
+The country used for normalization is resolved in the following order:
+
+1. The `country_id` field on the record itself (if present).
+2. The `country_id` of the linked `partner_id` (if present).
+3. The **company's country** (`res.company.country_id`).
+
+```python
+# base_phone/models/phone_validation_mixin.py
+def phone_format(self, number, country=None, company=None):
+    country = country or self._phone_validation_get_country()
+    if not country:
+        return number
+    return phone_validation.phone_format(
+        number,
+        country.code if country else None,
+        country.phone_code if country else None,
+        force_format="INTERNATIONAL",
+        raise_exception=False,
+    )
+```
+
+### Example
+
+A French partner with the number `01-55-42-12-42` is saved while the company country is set to France (`FR`). Odoo normalizes it to:
+
+```text
+Input:  01-55-42-12-42
+Output: +33 1 55 42 12 42
+```
+
+<Warning>
+  If your company has no country set, Odoo cannot determine the local dialing context and will return the number unchanged. Always set a country on your company before relying on automatic reformatting.
+</Warning>
+
+## Caller ID matching: digits to match from end
+
+When an incoming call arrives, Odoo looks up the caller's number against phone and mobile fields across all registered phone models (partners, leads, employees, etc.). Because carriers don't always present numbers in a consistent format, the lookup matches only the **last N digits** of the presented number.
+
+The value of N is the **Number of Digits To Match From End** setting, stored on `res.company` as `number_of_digits_to_match_from_end` (default: `8`).
+
+```python
+# base_phone/models/res_company.py
+number_of_digits_to_match_from_end = fields.Integer(
+    string="Number of Digits To Match From End",
+    default=8,
+)
+```
+
+For example, with N = 8 and an incoming number `0033155421242`, Odoo searches for records whose phone or mobile ends with `55421242`.
+
+<Tip>
+  Setting N too low increases the chance of false matches across different country codes. Setting it too high causes misses when carriers strip or add country prefixes. The default of 8 works well for most European deployments.
+</Tip>
+
+## Configure the setting in General Settings
+
+<Steps>
+  <Step title="Open General Settings">
+    Navigate to **Settings → General Settings**.
+  </Step>
+  <Step title="Find the Telephony section">
+    Scroll to the **Telephony** block (inserted after the **Users** section by `base_phone`). You will see the **Incoming calls** setting.
+  </Step>
+  <Step title="Set the number of digits">
+    Enter the number of digits Odoo should use when matching an incoming caller ID against stored phone numbers. The default is `8`.
+
+    ```text
+    Number of Digits (to match from end): 8
+    ```
+  </Step>
+  <Step title="Save">
+    Click **Save**. The value is stored on the current company and takes effect immediately for all subsequent caller ID lookups.
+  </Step>
+</Steps>
+
+<Note>
+  This setting is company-specific. If you operate multiple companies in Odoo, configure it separately for each company.
+</Note>
+
+## Bulk reformat all phone numbers
+
+If you add `base_phone` to an existing database that already has phone numbers in non-standard formats, you can run the **Reformat all phone numbers** wizard to normalize every phone and mobile field across all registered phone models in one operation.
+
+The wizard (`reformat.all.phonenumbers`) iterates over every record in every model that declares `_phone_name_fields`, calls `phone_format()` on each non-empty value, and writes back any values that changed.
+
+### Run the wizard
+
+<Steps>
+  <Step title="Enable developer mode">
+    Go to **Settings → General Settings** and activate developer mode. This exposes the **Technical** menu.
+  </Step>
+  <Step title="Open General Settings">
+    Navigate to **Settings → General Settings**. In the **Telephony** section, click the **Reformat all phone numbers** button.
+
+    Alternatively, access the wizard directly via **Settings → Technical → Phone → Reformat all phone numbers**.
+  </Step>
+  <Step title="Run the reformatting">
+    Click **Reformat all phone numbers** in the wizard. Odoo processes all records in the background.
+  </Step>
+  <Step title="Review the result">
+    When complete, the wizard displays a summary. If all numbers were normalized successfully, you will see:
+
+    ```text
+    All phone numbers have been reformatted successfully.
+    ```
+
+    Numbers that could not be parsed (for example, due to an invalid format or a missing country context) are listed in the **Phone numbers that couldn't be reformatted** text field.
+  </Step>
+</Steps>
+
+<Warning>
+  The wizard writes directly to all matching records, including archived ones (`active_test=False`). Run it in a test environment first if you are unsure about the quality of your existing phone number data.
+</Warning>

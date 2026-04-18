@@ -1,0 +1,93 @@
+---
+title: "Receive and handle incoming SIP calls in Odoo"
+description: "Voip OCA auto-detects incoming SIP calls via SIP.js, matches the caller to Odoo partners, and opens the softphone widget so you can accept or reject the call."
+---
+
+Voip OCA listens for incoming SIP sessions in the browser via SIP.js. When the PBX sends an INVITE, Odoo creates a call record, looks up the caller, and surfaces the widget — all before you take any action.
+
+## How incoming calls work
+
+When your browser receives a SIP INVITE from the PBX:
+
+<Steps>
+  <Step title="SIP session detected">
+    The `voip_agent_oca` service intercepts the incoming SIP INVITE from the PBX. The browser's WebRTC layer handles media negotiation.
+  </Step>
+  <Step title="Call record created">
+    A `voip.call` record is created with `type_call = "incoming"` and an initial state of `"calling"`. The caller's phone number is stored on `phone_number`.
+  </Step>
+  <Step title="Partner lookup">
+    Odoo searches `res.partner` for a record whose `phone` or `mobile` field matches the incoming number. If a match is found, `partner_id` is set on the call record.
+  </Step>
+  <Step title="Widget opens automatically">
+    The softphone widget opens (or un-folds if already loaded) and displays the active call screen. If the caller was matched to a partner, the partner's name and avatar are shown. If not, only the phone number is displayed.
+  </Step>
+</Steps>
+
+## Accepting or rejecting a call
+
+While the call is in the `calling` state, the widget shows an **Accept** button (green phone icon). You have two options:
+
+<CardGroup cols={2}>
+  <Card title="Accept" icon="phone">
+    Click the green **Accept** button. The `accept_call()` method is called on the server, setting `start_date` to the current time and transitioning the call state to `"ongoing"`. The elapsed-time counter starts immediately.
+  </Card>
+  <Card title="Reject" icon="phone-off">
+    Click the red **Hang up** button in the widget footer. The `reject_call()` method is called, setting `end_date` and transitioning the state to `"rejected"`. The call record and widget are dismissed.
+  </Card>
+</CardGroup>
+
+### Server-side state transitions
+
+```python
+def accept_call(self):
+    self.start_date = fields.Datetime.now()
+    self.state = "ongoing"
+    return self.format_call()
+
+def reject_call(self):
+    self.end_date = fields.Datetime.now()
+    self.state = "rejected"
+    return self.format_call()
+```
+
+## During an accepted call
+
+Once the call is `ongoing`, the same in-call controls available for outbound calls are active:
+
+| Control | Description |
+|---------|-------------|
+| **Transfer** | Blind-transfer the call to another extension or number |
+| **Mute** | Toggle microphone mute |
+| **Hold / Resume** | Place the call on hold or resume it |
+| **Numpad** | Send DTMF tones |
+| **Hang up** | End the call; state transitions to `"terminated"` |
+
+## Unknown callers
+
+If the incoming phone number does not match any partner in Odoo, the widget displays:
+
+- "No contact info" in place of the avatar and name
+- The raw phone number beneath the status line
+
+You can still accept or reject the call normally. After the call ends, the unknown caller appears in the **Recent Calls** tab. From there, clicking the entry and then the **+** button opens the partner creation form pre-filled with the phone number so you can add them to Odoo.
+
+## Missed calls
+
+If an incoming call is not answered and the remote party hangs up, the call state is set to `"missed"`. The call appears in the **Recent Calls** tab with a missed-call indicator. No `start_date` is set on a missed call.
+
+## Call type and record fields
+
+Incoming calls produce a `voip.call` record with the following field values:
+
+| Field | Value |
+|-------|-------|
+| `type_call` | `"incoming"` |
+| `state` (initial) | `"calling"` |
+| `state` (accepted) | `"ongoing"` |
+| `state` (rejected) | `"rejected"` |
+| `state` (missed) | `"missed"` |
+| `start_date` | Set when `accept_call()` is called |
+| `end_date` | Set when `reject_call()` or `terminate_call()` is called |
+| `partner_id` | Matched partner, or empty if caller is unknown |
+| `phone_number` | The caller's phone number as received from the PBX |

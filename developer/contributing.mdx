@@ -1,0 +1,188 @@
+---
+title: "Contribute to OCA/connector-telephony on GitHub"
+description: "How to report bugs, submit pull requests, and contribute code to OCA/connector-telephony following OCA quality tools and community standards."
+---
+
+OCA/connector-telephony is a community project maintained under the [Odoo Community Association (OCA)](https://odoo-community.org). All contributions are welcome and must follow OCA standards.
+
+## Reporting bugs
+
+File bugs at [https://github.com/OCA/connector-telephony/issues](https://github.com/OCA/connector-telephony/issues).
+
+Include the following in your report:
+
+- **Module name** — e.g., `base_phone`, `voip_oca`
+- **Odoo version** — this repository targets Odoo 18.0
+- **Steps to reproduce** — a minimal sequence that reliably triggers the issue
+- **Expected vs. actual behavior**
+- **Error traceback** if applicable (from the Odoo server log)
+
+## Contributing code
+
+Follow the [OCA contribution guide](https://odoo-community.org/page/Contribute) for the full pull request workflow, including CLA requirements and review process.
+
+<Steps>
+  <Step title="Fork and clone the repository">
+    Fork `OCA/connector-telephony` on GitHub, then clone your fork locally.
+
+    ```bash
+    git clone https://github.com/your-username/connector-telephony.git
+    cd connector-telephony
+    git checkout -b my-feature-branch
+    ```
+  </Step>
+  <Step title="Install pre-commit hooks">
+    This repository uses [pre-commit](https://pre-commit.com) to enforce code quality. Install it once per clone:
+
+    ```bash
+    pip install pre-commit
+    pre-commit install
+    ```
+  </Step>
+  <Step title="Make your changes">
+    Follow OCA module structure (see below). Write tests for any new behavior.
+  </Step>
+  <Step title="Run pre-commit on all files">
+    Before opening a pull request, run the full pre-commit suite:
+
+    ```bash
+    pre-commit run --all-files
+    ```
+
+    Fix any reported issues before pushing.
+  </Step>
+  <Step title="Open a pull request">
+    Push your branch and open a PR against the `18.0` branch. Reference the related issue if one exists.
+  </Step>
+</Steps>
+
+## Code quality tools
+
+The repository enforces quality through the following tools, all configured in the repository root:
+
+<AccordionGroup>
+  <Accordion title="ruff — Python linting and formatting">
+    [Ruff](https://docs.astral.sh/ruff/) handles both linting and formatting for Python files. Configuration is in `ruff.toml`.
+
+    ```bash
+    ruff check --fix .
+    ruff format .
+    ```
+
+    Ruff replaces flake8 and isort in this project. Pre-commit runs it automatically via the `ruff-pre-commit` hook.
+  </Accordion>
+  <Accordion title="pylint-odoo — Odoo-specific checks">
+    Two pylint profiles are enforced:
+
+    - `.pylintrc` — optional checks, exits with zero (advisory only)
+    - `.pylintrc-mandatory` — mandatory checks, fails the pre-commit run if violations are found
+
+    ```bash
+    pylint --rcfile=.pylintrc-mandatory my_module/
+    ```
+  </Accordion>
+  <Accordion title="prettier — XML, JSON, YAML, Markdown, CSS, JS formatting">
+    [Prettier](https://prettier.io) with the `@prettier/plugin-xml` plugin formats non-Python files. Configuration is in `prettier.config.cjs`.
+
+    ```bash
+    prettier --write .
+    ```
+  </Accordion>
+  <Accordion title="eslint — JavaScript linting">
+    [ESLint](https://eslint.org) lints JavaScript files. Configuration is in `eslint.config.cjs`. Pre-commit runs it with `--fix` automatically.
+
+    ```bash
+    eslint --fix path/to/file.js
+    ```
+  </Accordion>
+  <Accordion title="OCA maintainer-tools hooks">
+    Several OCA-specific hooks run automatically:
+
+    - `oca-checks-odoo-module` — validates module structure and manifest
+    - `oca-checks-po` — validates translation files
+    - `oca-gen-addon-readme` — regenerates `README.rst` from `readme/` fragments
+    - `oca-gen-external-dependencies` — updates `requirements.txt` from manifests
+  </Accordion>
+</AccordionGroup>
+
+## Module structure
+
+All modules follow OCA conventions:
+
+```
+my_module/
+├── __manifest__.py         # Module metadata and dependencies
+├── __init__.py
+├── models/
+│   ├── __init__.py
+│   └── my_model.py
+├── views/
+│   └── my_model_views.xml
+├── static/
+│   ├── src/                # JavaScript source files
+│   └── tests/              # JavaScript unit tests
+├── tests/
+│   ├── __init__.py
+│   └── test_my_module.py   # Python tests
+└── readme/
+    ├── DESCRIPTION.md
+    ├── INSTALL.md           # If installation steps are needed
+    └── CHANGELOG.md
+```
+
+<Note>
+  The `readme/` directory contains the source fragments that `oca-gen-addon-readme` assembles into `README.rst`. Edit the fragments, not `README.rst` directly — the hook overwrites it.
+</Note>
+
+## Testing
+
+### Python tests
+
+Python tests live in each module's `tests/` directory and use Odoo's test framework.
+
+`base_phone` tests:
+- `base_phone/tests/test_base_phone.py` — covers phone model registry, caller ID lookup, number reformatting, and phone validation
+
+`voip_oca` tests:
+- `voip_oca/tests/test_backend.py` — backend model tests
+- `voip_oca/tests/test_frontend.py` — front-end controller tests
+- `voip_oca/tests/test_js.py` — JavaScript test runner integration
+
+Run Python tests with:
+
+```bash
+python odoo-bin -d your_db --test-enable --stop-after-init -i base_phone
+```
+
+### JavaScript unit tests
+
+JavaScript tests live in `static/tests/` within each module. They are run via `test_js.py` using Odoo's built-in JS test infrastructure.
+
+## Translations
+
+Translations are managed on [Weblate](https://translation.odoo-community.org/engage/connector-telephony-18-0/). Do not submit `.po` files directly in pull requests — use Weblate instead.
+
+<Note>
+  The pre-commit hook enforces that no `en.po` file exists (English is the source language and does not have a `.po` file).
+</Note>
+
+## Maintainers
+
+| Module | Maintainer |
+|---|---|
+| `base_phone` | [alexis-via](https://github.com/alexis-via) |
+| `voip_oca` | [etobella](https://github.com/etobella) |
+
+Tag the relevant maintainer in your pull request if you need a review on module-specific logic.
+
+## License
+
+All code in this repository is licensed under [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html). All contributions must be compatible with AGPL-3.0. By submitting a pull request, you agree that your contribution is licensed under AGPL-3.0.
+
+<Warning>
+  Do not include code from dependencies with licenses incompatible with AGPL-3.0. If you are unsure, check with the maintainers before submitting.
+</Warning>
+
+## OCA membership
+
+Consider [joining the OCA](https://odoo-community.org) to support the community and gain voting rights in project governance.

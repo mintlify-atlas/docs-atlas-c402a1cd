@@ -1,0 +1,210 @@
+---
+title: "OCA Connector Telephony: module architecture overview"
+description: "How base_phone and voip_oca are structured — Python models, OWL frontend services, SIP.js WebRTC integration, and the full module dependency chain."
+---
+
+OCA Connector Telephony is split into two modules with distinct responsibilities. `base_phone` handles phone number validation and reformatting at the Python layer. `voip_oca` builds the full WebRTC softphone on top of Odoo's `mail` module, connecting the browser directly to a PBX over a SIP WebSocket.
+
+## Two-module architecture
+
+<CardGroup cols={2}>
+  <Card title="base_phone" icon="phone">
+    Python-only. Provides abstract models for phone number validation and bulk reformatting. No JavaScript. Depends on Odoo core's `phone_validation` and `base_setup` modules, and the `phonenumbers` Python library.
+  </Card>
+  <Card title="voip_oca" icon="headset">
+    Full VOIP implementation. Python models for PBX configuration and call records, plus an OWL frontend with SIP.js integration. Depends on `mail`. Explicitly excludes Odoo's official `voip` module to avoid conflicts.
+  </Card>
+</CardGroup>
+
+## Module dependency chain
+
+```
+phone_validation (Odoo core)
+        │
+        ▼
+   base_phone
+        │
+        ▼ (optional)
+    voip_oca  ──depends──▶  mail (Odoo core)
+    (excludes: voip)
+```
+
+`base_phone` is a standalone utility module. `voip_oca` is independent of `base_phone` — it depends only on `mail` and has no hard dependency on phone number validation.
+
+## base_phone: Python models
+
+`base_phone` is a Python-only module with no frontend assets beyond a small component override in `base_phone/static/src/components/`.
+
+<AccordionGroup>
+  <Accordion title="phone.common (abstract model)">
+    Defined in `base_phone/models/phone_common.py`. An abstract model (`models.AbstractModel`) that provides shared methods for any model that needs to look up records by phone number:
+
+    - `get_record_from_phone_number(presented_number)` — Searches all registered phone models by suffix-matching the last N digits (where N is configured per company). Returns `(model_name, record_id, display_name)`.
+    - `get_name_from_phone_number(presented_number)` — Convenience wrapper that returns only the display name.
+    - `click2dial(erp_number)` — Stub designed to be overridden by IPBX-specific modules (e.g., `asterisk_click2dial`).
+    - `convert_to_dial_number(erp_number)` — Reformats an international number for dialing, using `phonenumbers.format_out_of_country_calling_number`.
+
+    Models register themselves for phone lookup by setting `_phone_name_sequence` (int, controls search priority) and `_phone_name_fields` (list of field names).
+  </Accordion>
+  <Accordion title="phone.validation.mixin (abstract model)">
+    Defined in `base_phone/models/phone_validation_mixin.py`. A mixin for any model that stores phone numbers and needs them validated on write.
+
+    - `_phone_validation_get_country()` — Resolves the appropriate country by checking `country_id`, then `partner_id.country_id`, then the current company's country.
+    - `phone_format(number, country, company)` — Delegates to Odoo's `phone_validation` tool, always forcing `INTERNATIONAL` format.
+  </Accordion>
+  <Accordion title="Wizard: bulk reformatting">
+    `base_phone` ships a `reformat_all_phonenumbers` wizard that iterates over all phone-capable models and rewrites stored numbers to E.164/international format. This is useful after changing the company country or after migrating data.
+  </Accordion>
+  <Accordion title="res.partner extension">
+    `base_phone/models/res_partner.py` extends `res.partner` with `_phone_name_sequence` and `_phone_name_fields`, registering it with `phone.common` for caller ID lookups.
+  </Accordion>
+</AccordionGroup>
+
+## voip_oca: Python models
+
+The server side of `voip_oca` stores configuration and call history. The Odoo server does **not** participate in SIP signalling — it is purely a config store and call log.
+
+<AccordionGroup>
+  <Accordion title="voip.pbx">
+    Defined in `voip_oca/models/voip_pbx.py`. Stores PBX connection parameters:
+
+    | Field | Type | Default | Description |
+    |---|---|---|---|
+    | `name` | Char | — | Display name |
+    | `domain` | Char | `localhost` | SIP domain |
+    | `ws_server` | Char | `ws://localhost` | WebSocket URL for SIP transport |
+    | `mode` | Selection | `test` | `test` or `prod`; agent skips SIP in test mode |
+  </Accordion>
+  <Accordion title="voip.call">
+    Defined in `voip_oca/models/voip_call.py`. One record per call attempt.
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `phone_number` | Char | Raw dialled/received number |
+    | `type_call` | Selection | `incoming` or `outgoing` |
+    | `state` | Selection | `calling`, `ongoing`, `terminated`, `missed`, `rejected`, `aborted` |
+    | `pbx_id` | Many2one | PBX used |
+    | `start_date` / `end_date` | Datetime | Set when call is accepted / terminated |
+    | `partner_id` | Many2one | Resolved contact (auto-matched by number if not given) |
+    | `user_id` | Many2one | Responsible user |
+
+    Key server methods: `create_call()`, `accept_call()`, `reject_call()`, `terminate_call()`, `get_recent_calls()`.
+  </Accordion>
+  <Accordion title="res.users extension">
+    `voip_oca/models/res_users.py` adds per-user PBX credentials (`voip_username`, `voip_password`, `voip_pbx_id`). These are injected into the browser session via `ir.http` so the frontend never makes an extra RPC to fetch them.
+  </Accordion>
+  <Accordion title="ir.http session injection">
+    `voip_oca/models/ir_http.py` overrides `session_info()` to append a `voip` key with the current user's PBX config. The `VoipOCA` service reads and deletes this key on startup, so credentials live only in memory.
+  </Accordion>
+  <Accordion title="mail.activity extension">
+    `voip_oca/models/mail_activity.py` adds `get_call_activities()`, which returns pending `phonecall`-category activities for the current user. `mail_activity_mixin.py` adds a `main_partner_id` computed field used to resolve the contact for an activity-initiated call.
+  </Accordion>
+</AccordionGroup>
+
+## voip_oca: frontend architecture
+
+The frontend is built with OWL (Odoo's component framework) and communicates with the PBX exclusively through a WebSocket SIP connection in the browser. Odoo's HTTP server is not involved in call signalling.
+
+### Key directories
+
+```
+voip_oca/static/
+├── lib/
+│   └── sip.js                  # Bundled SIP.js library (loaded on demand)
+└── src/
+    ├── components/             # OWL UI components
+    │   ├── voip_oca_systray/   # Systray button (entry point)
+    │   ├── softphone/          # Main softphone panel
+    │   ├── call/               # Active call controls
+    │   ├── numpad/             # DTMF numpad
+    │   ├── partner/            # Contact detail panel
+    │   ├── phone_field/        # Patches the standard PhoneField widget
+    │   ├── activity_list/      # Pending phonecall activities
+    │   ├── call_list/          # Recent call history
+    │   ├── partner_list/       # Contact search results
+    │   └── transfer/           # Call transfer popover
+    ├── core/
+    │   └── phone/
+    │       └── call_model.esm.js  # Call record model (extends mail Record)
+    ├── services/
+    │   ├── voip_oca_service.esm.js    # State management service
+    │   └── voip_agent_service.esm.js  # SIP.js bridge service
+    └── utils/
+        └── utils.esm.js        # String matching, duration formatting
+```
+
+### Services
+
+<CardGroup cols={2}>
+  <Card title="voip_oca (VoipOCA)" icon="database">
+    The reactive state container for the softphone. Registered in Odoo's service registry under `"voip_oca"`. Holds UI state (open/folded, selected tab) and the current call, partner, and activity. Uses OWL's `reactive()` so component re-renders are automatic when any property changes.
+  </Card>
+  <Card title="voip_agent_oca (VoipAgent)" icon="tower-broadcast">
+    The SIP.js bridge. Registered under `"voip_agent_oca"`. Loads the SIP.js bundle on demand, creates a `SIP.UserAgent`, registers with the PBX, and delegates all SIP events back to `voip_oca`. Handles outbound `INVITE`, inbound `INVITE` (`onInvite`), hold, mute, DTMF, and transfer.
+  </Card>
+</CardGroup>
+
+### Component tree
+
+```
+VoipOCASystray          (systray button — toggles softphone open/closed)
+└── VoipOCASoftphone    (registered as a main_component; the floating panel)
+    ├── Call            (active call controls: accept, hangup, hold, mute, DTMF, transfer)
+    │   ├── Numpad      (in-call DTMF pad)
+    │   └── Transfer    (popover for blind transfer)
+    ├── Partner         (contact detail: call, email, schedule activity, mark done)
+    ├── ActivityList    (pending phonecall activities, plugged via voip_elements registry)
+    ├── CallList        (recent call history, plugged via voip_elements registry)
+    ├── PartnerList     (contact search, plugged via voip_elements registry)
+    └── PhoneField      (patch on the standard field — calls agent.call() on click)
+```
+
+<Note>
+  `VoipOCASoftphone` uses a `voip_elements` registry to discover which tab components to render and which search functions to invoke. This means new tabs can be added by third-party modules without modifying `softphone.esm.js`.
+</Note>
+
+### SIP.js library loading
+
+The SIP.js bundle (`voip_oca/static/lib/sip.js`) is placed in a separate asset bundle `voip_oca.agent_assets`, not in `web.assets_backend`. The agent calls `loadBundle("voip_oca.agent_assets")` at startup, so the ~500 KB SIP library is fetched only when an active PBX config is present and the browser supports WebRTC. Pages that never need VOIP incur zero cost.
+
+## Call flow
+
+The following describes a complete outbound call lifecycle:
+
+1. **User clicks a phone number** in any form view. The patched `PhoneField` component intercepts the click and calls `agent.call({ number })`.
+2. **`VoipAgent.call()`** opens the softphone panel, plays a dial tone, and calls `voip.call` RPC on `voip.call` to create a server-side call record in state `calling`.
+3. **SIP INVITE** is sent from the browser to the PBX WebSocket (`ws://` or `wss://`) using SIP over WebSocket (RFC 7118). The PBX routes the call to the PSTN or internal extension.
+4. **PBX sends 200 OK**. The agent's `_onInviteAccepted` delegate fires, stops the dial tone, and calls `voip.call` RPC `accept_call` to transition the server record to `ongoing` with a `start_date`.
+5. **RTP audio** flows directly browser ↔ PBX via WebRTC. Odoo's server is not in the media path.
+6. **User hangs up** (or remote BYE arrives). `VoipAgent.hangup()` / `_onHanghup()` calls `voip.call` RPC `terminate_call`, setting `end_date` and state `terminated`.
+
+For inbound calls the flow is reversed: the PBX sends a SIP INVITE to the registered UA, `onInvite()` fires in the browser, a call record is created, and the softphone opens automatically.
+
+```
+Browser (OWL + SIP.js)          Odoo Server (HTTP/JSON-RPC)       PBX (WebSocket SIP)
+        │                                   │                              │
+        │── session_info ─────────────────▶│                              │
+        │◀─ voip config (pbx_ws, creds) ───│                              │
+        │                                   │                              │
+        │── SIP REGISTER ─────────────────────────────────────────────────▶│
+        │◀─ 200 OK ────────────────────────────────────────────────────────│
+        │                                   │                              │
+        │── create_call RPC ───────────────▶│                              │
+        │◀─ call record ───────────────────│                              │
+        │                                   │                              │
+        │── SIP INVITE ────────────────────────────────────────────────────▶│
+        │◀─ 180 Ringing ───────────────────────────────────────────────────│
+        │◀─ 200 OK ────────────────────────────────────────────────────────│
+        │── accept_call RPC ───────────────▶│                              │
+        │                                   │                              │
+        │◀══════════════ WebRTC RTP audio (browser ↔ PBX) ════════════════▶│
+        │                                   │                              │
+        │── terminate_call RPC ────────────▶│                              │
+        │── SIP BYE ───────────────────────────────────────────────────────▶│
+```
+
+## Tested PBX providers
+
+<Info>
+  `voip_oca` has been tested with [Zerovoz](https://zerovoz.com/) and [Ringover](https://www.ringover.es/). Any WebRTC-capable SIP provider should work, including Axivox and OnSIP, provided they expose a `wss://` WebSocket endpoint and allow SIP registration from a browser UA.
+</Info>

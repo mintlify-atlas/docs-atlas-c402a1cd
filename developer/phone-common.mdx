@@ -1,0 +1,180 @@
+---
+title: "phone.common abstract model — caller ID and dial methods"
+description: "Full API reference for phone.common in base_phone: get_record_from_phone_number, click2dial extension point, phone model registry, and number conversion."
+---
+
+`phone.common` is an abstract Odoo model (`models.AbstractModel`) defined in `base_phone`. It provides shared telephony methods used across all connector-telephony modules: looking up records from an incoming phone number, triggering a dial action, converting stored numbers to a dialable format, and discovering which models participate in phone number lookup.
+
+No table or fields are stored on this model directly. Inherit it or call its methods via `self.env["phone.common"]`.
+
+---
+
+## Methods
+
+### `get_name_from_phone_number`
+
+<ParamField path="presented_number" type="string" required>
+  The raw digit string presented by the IPBX or SIP stack for an incoming call, e.g. `"0033142000102"`. Must contain only digits.
+</ParamField>
+
+**Returns** `string | False`
+
+Convenience wrapper around `get_record_from_phone_number`. Returns the `display_name` of the first matching record, or `False` when no match is found.
+
+This is the primary entry point for caller-ID name enrichment. Your IPBX integration module calls this method and injects the returned string as the CallerID name field before the call is presented to the agent.
+
+```python
+name = self.env["phone.common"].get_name_from_phone_number("0033142000102")
+# "Akretion France"   or   False
+```
+
+---
+
+### `get_record_from_phone_number`
+
+<ParamField path="presented_number" type="string" required>
+  The raw incoming phone number as a digit string. Non-digit characters produce a warning but are not stripped automatically.
+</ParamField>
+
+**Returns** `tuple(model_name: str, record_id: int, display_name: str) | False`
+
+Searches all registered phone models (see `_get_phone_models`) for a record whose stored phone or mobile field ends with the last N digits of `presented_number`, where N is controlled by the company setting `number_of_digits_to_match_from_end` (default: `8`).
+
+#### Matching algorithm
+
+The method extracts a suffix from the presented number and builds a `LIKE` query per registered field:
+
+```python
+end_number_to_match = presented_number[-nr_digits_to_match_from_end:]
+pg_search_number = "%" + end_number_to_match
+
+# For each field in each phone model:
+# SELECT id FROM {table} WHERE replace(field, ' ', '') ilike %s
+```
+
+Spaces are stripped from the stored value before comparison, so `+33 1 42 00 01 02` and `+33142000102` both match `42000102`.
+
+Models are searched in ascending `_phone_name_sequence` order (see `_get_phone_models`). The first model that returns at least one row wins. If multiple records in the same model match, the first row from the database is used and a warning is logged.
+
+<Note>
+  `number_of_digits_to_match_from_end` is a per-company integer field on `res.company`. Tune it to balance false positives (too low) against missed matches caused by international prefix differences (too high).
+</Note>
+
+```python
+result = self.env["phone.common"].get_record_from_phone_number("0033142000102")
+# ('res.partner', 42, 'Akretion France')
+
+result = self.env["phone.common"].get_record_from_phone_number("0000000000")
+# False
+```
+
+---
+
+### `click2dial`
+
+<ParamField path="erp_number" type="string" required>
+  The phone number as stored in Odoo, typically in E.164 or international format (e.g. `"+33142000102"`).
+</ParamField>
+
+**Returns** `dict{"dialed_number": str}`
+
+Base implementation is a pass-through that returns the number unchanged:
+
+```python
+{"dialed_number": erp_number}
+```
+
+<Tip>
+  This method is designed to be overridden in IPBX-specific modules such as `asterisk_click2dial` or `ovh_telephony_connector`. Override it to perform any necessary protocol handshake, originate the call on the PBX, and return the actual number dialed (which may differ from `erp_number` after conversion).
+</Tip>
+
+Example override in a custom IPBX module:
+
+```python
+class PhoneCommon(models.AbstractModel):
+    _inherit = "phone.common"
+
+    @api.model
+    def click2dial(self, erp_number):
+        to_dial = self.convert_to_dial_number(erp_number)
+        # ... originate call via AMI/REST API ...
+        return {"dialed_number": to_dial}
+```
+
+---
+
+### `convert_to_dial_number`
+
+<ParamField path="erp_number" type="string" required>
+  A phone number in international format as stored in Odoo (e.g. `"+33 1 42 00 01 02"`). Must be parseable by the `phonenumbers` library without a region hint.
+</ParamField>
+
+**Returns** `string`
+
+Converts a number stored in Odoo's international format into the format required by an external phone system. The conversion uses `phonenumbers.format_out_of_country_calling_number`, which formats the number as it would be dialed from the company's country, then strips all formatting characters (spaces, dashes, dots, parentheses, slashes):
+
+```python
+parsed_num = phonenumbers.parse(erp_number, None)
+country_code = self.env.company.country_id.code   # e.g. "FR"
+
+to_dial = phonenumbers.format_out_of_country_calling_number(
+    parsed_num, country_code.upper()
+)
+# Strip: spaces, hyphens, dots, parentheses, slashes
+to_dial = to_dial.translate(to_dial.maketrans("", "", " -.()/"))
+```
+
+For example, `"+1 650 555 0100"` dialed from France (`FR`) becomes `"0016505550100"`.
+
+<Warning>
+  This method asserts that `erp_number` is non-empty and that the company has a country set. Both conditions raise `AssertionError` if unmet. Ensure your company's country is configured before calling this method.
+</Warning>
+
+<Tip>
+  If your company's dialing conventions differ (e.g. a private branch exchange that requires a prefix), inherit this method in a local module rather than modifying it directly.
+</Tip>
+
+---
+
+### `_get_phone_models`
+
+**Returns** `list[dict]`
+
+Iterates over all models in the Odoo registry and returns those that declare both `_phone_name_sequence` (an `int`) and `_phone_name_fields` (a `list`). The result is sorted in ascending order of `_phone_name_sequence` and each item is a dict:
+
+```python
+{
+    "object": <model recordset>,   # env[model_name] with callerid=True context
+    "fields": ["phone", "mobile"], # _phone_name_fields value
+}
+```
+
+#### Registering a model for phone lookup
+
+To make your model searchable by phone number, add both attributes to its class:
+
+```python
+class MyModel(models.Model):
+    _name = "my.model"
+    _phone_name_sequence = 20      # lower = searched first
+    _phone_name_fields = ["phone", "mobile", "direct_phone"]
+
+    phone = fields.Char()
+    mobile = fields.Char()
+    direct_phone = fields.Char()
+```
+
+`res.partner` uses sequence `10` by default, so custom models with sequence `> 10` are searched after partners.
+
+<Note>
+  The `callerid=True` context key is set on each model environment before the registry check. Models can use this context to adjust their `_phone_name_fields` or `_phone_name_sequence` dynamically (for example, to exclude archived records).
+</Note>
+
+Example of the sorted output structure (as shown in the source comments):
+
+```python
+# [
+#   {'fields': ['phone', 'mobile'], 'object': res.partner()},
+#   {'fields': ['phone', 'mobile'], 'object': crm.lead()},
+# ]
+```

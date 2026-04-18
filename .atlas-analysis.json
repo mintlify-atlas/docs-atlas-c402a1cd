@@ -1,0 +1,104 @@
+{
+  "projectType": "framework",
+  "projectName": "OCA Connector Telephony",
+  "projectDescription": "A set of Odoo community modules that integrate telephony and VOIP capabilities into Odoo, providing phone number validation, WebRTC-based softphone widgets, and extensible hooks for building custom telephony connectors.",
+  "theme": "palm",
+  "primaryColor": "#94cb04",
+  "lightColor": "#545454",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Modules",
+            "pages": [
+              "modules/base-phone",
+              "modules/voip-oca"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/pbx-setup",
+              "configuration/user-setup",
+              "configuration/phone-number-settings"
+            ]
+          },
+          {
+            "group": "Usage",
+            "pages": [
+              "usage/softphone-widget",
+              "usage/making-calls",
+              "usage/receiving-calls",
+              "usage/call-history-activities"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Developer Guide",
+        "groups": [
+          {
+            "group": "Architecture",
+            "pages": [
+              "developer/architecture",
+              "developer/frontend-services"
+            ]
+          },
+          {
+            "group": "Python API",
+            "pages": [
+              "developer/phone-common",
+              "developer/phone-validation-mixin",
+              "developer/voip-models"
+            ]
+          },
+          {
+            "group": "Extending",
+            "pages": [
+              "developer/extending-phone-models",
+              "developer/click2dial",
+              "developer/contributing"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Automatic phone number formatting to E.164 international standard using the phonenumbers library",
+    "WebRTC-based browser softphone widget integrated into Odoo's UI via SIP.js",
+    "PBX server management with test and production environment modes",
+    "Caller ID lookup — match incoming phone numbers to Odoo partners",
+    "Call history tracking with states (calling, ongoing, missed, terminated, rejected)",
+    "Click-to-dial from partner views and call activity scheduling",
+    "Extensible phone model registry via _phone_name_sequence and _phone_name_fields",
+    "Compatible with Zerovoz, Ringover, Axivox, and OnSIP VOIP providers"
+  ],
+  "publicApiSurface": [
+    "phone.common::get_record_from_phone_number(presented_number)",
+    "phone.common::get_name_from_phone_number(presented_number)",
+    "phone.common::click2dial(erp_number)",
+    "phone.common::convert_to_dial_number(erp_number)",
+    "phone.common::_get_phone_models()",
+    "phone.validation.mixin::phone_format(number, country, company)",
+    "voip.call::create_call(values)",
+    "voip.call::get_recent_calls(_search, offset, limit)",
+    "voip.call::terminate_call()",
+    "voip.call::accept_call()",
+    "voip.call::reject_call()",
+    "voip.pbx (model: name, domain, ws_server, mode)",
+    "VoipOCA JS service (voip_oca): handleVoip(), handleFold(), open(), acceptCall(), rejectCall()",
+    "res.users::_voip_get_info()"
+  ]
+}

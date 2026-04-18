@@ -1,97 +1,53 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "OCA Connector Telephony: VOIP & Phone Integration for Odoo"
+description: "Open-source Odoo modules that add phone number validation, WebRTC softphone, PBX integration, and call tracking to your Odoo instance."
 ---
 
-## Setting up
+OCA Connector Telephony is a collection of Odoo Community Association (OCA) modules that bring telephony capabilities directly into Odoo. Whether you need automatic phone number formatting with international standards or a full WebRTC-based softphone widget powered by SIP.js, these modules integrate cleanly with Odoo 18.0 and are compatible with multiple VOIP providers including Zerovoz, Ringover, Axivox, and OnSIP.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install base_phone and voip_oca into your Odoo instance
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Configure PBX and start making calls in minutes
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Module Reference" icon="cube" href="/modules/base-phone">
+    Explore what each module provides and its dependencies
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Developer Guide" icon="code" href="/developer/architecture">
+    Extend and customize telephony behavior in your own modules
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What's included
 
-Everything you need to create world-class documentation.
+<CardGroup cols={2}>
+  <Card title="Base Phone" icon="phone" href="/modules/base-phone">
+    Validates and auto-formats phone numbers to E.164 international standard using the `phonenumbers` library. Extends Odoo's built-in `phone_validation` module.
+  </Card>
+  <Card title="Voip OCA" icon="headset" href="/modules/voip-oca">
+    Embeds a full SIP.js-powered softphone widget into the Odoo UI. Make and receive calls, track call history, and manage call activities without leaving Odoo.
+  </Card>
+</CardGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Get up and running
 
-## Need inspiration?
+<Steps>
+  <Step title="Install the modules">
+    Add `base_phone` and `voip_oca` to your Odoo addons path and install them from the Apps menu. See [Installation](/installation) for prerequisites.
+  </Step>
+  <Step title="Configure your PBX server">
+    In debug mode, go to **Settings > Technical > Discuss > PBX Servers** and create a server entry with your domain and WebSocket URL. See [PBX Setup](/configuration/pbx-setup).
+  </Step>
+  <Step title="Set up user credentials">
+    Assign each user their PBX username and password via **Settings > Users** or through user Preferences. See [User Setup](/configuration/user-setup).
+  </Step>
+  <Step title="Start making calls">
+    Log in to Odoo — the softphone connects automatically. Click any phone number in a partner view or open the softphone widget to dial. See [Making Calls](/usage/making-calls).
+  </Step>
+</Steps>
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Note>
+  These modules require Odoo 18.0. Your VOIP provider must support WebRTC/WebSocket connections (RFC 7118). Test your provider compatibility before deploying to production.
+</Note>

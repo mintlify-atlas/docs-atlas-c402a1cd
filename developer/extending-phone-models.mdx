@@ -1,0 +1,148 @@
+---
+title: "Register custom models in the phone number registry"
+description: "Add _phone_name_sequence and _phone_name_fields to any Odoo model to enable caller ID lookup and phone number matching for your custom records."
+---
+
+The phone model registry is how `base_phone` discovers which Odoo models participate in caller ID lookup. When an incoming call arrives, `phone.common` scans all registered models in priority order and returns the first matching record.
+
+## How the registry works
+
+`_get_phone_models()` in `phone.common` iterates over every model in the Odoo registry and checks for two attributes:
+
+- `_phone_name_sequence` — an integer that sets search priority. Models with a **lower** value are searched first.
+- `_phone_name_fields` — a list of field name strings to search (e.g., `['phone', 'mobile']`).
+
+Both attributes must be present and of the correct type for a model to be included. If either is missing, the model is silently skipped.
+
+```python
+# phone_common.py — simplified excerpt
+for model_name in self.env.registry.keys():
+    senv = self.with_context(callerid=True).env[model_name]
+    if (
+        hasattr(senv, "_phone_name_sequence")
+        and isinstance(senv._phone_name_sequence, int)
+        and hasattr(senv, "_phone_name_fields")
+        and isinstance(senv._phone_name_fields, list)
+    ):
+        phoneobj.append((senv._phone_name_sequence, cdict))
+```
+
+The collected models are sorted by `_phone_name_sequence` in ascending order, so `res.partner` (sequence `10`) is searched before a model with sequence `20`.
+
+## How `get_record_from_phone_number` uses the registry
+
+`get_record_from_phone_number` performs a partial-match SQL search against the end of the presented number. The number of digits used for matching is controlled by the `number_of_digits_to_match_from_end` setting on the company.
+
+For each registered model (in sequence order), it runs:
+
+```sql
+SELECT id FROM {table} WHERE
+  replace(phone, ' ', '') ilike %{end_digits}
+  OR replace(mobile, ' ', '') ilike %{end_digits}
+```
+
+The first model with a matching record wins. If multiple records within a single model match, the first result is returned and a warning is logged.
+
+When a match is found, the function returns a three-tuple:
+
+```python
+('res.partner', 42, 'Alexis de Lattre')
+# (model_name, record_id, display_name)
+```
+
+## How `res.partner` registers itself
+
+`base_phone` ships with `res.partner` already registered at sequence `10`:
+
+```python
+class ResPartner(models.Model):
+    _name = "res.partner"
+    _inherit = ["res.partner", "phone.validation.mixin"]
+    _phone_name_sequence = 10
+    _phone_name_fields = ["phone", "mobile"]
+```
+
+Any custom model you register with a sequence greater than `10` will be searched after partners.
+
+## Registering a custom model
+
+<Steps>
+  <Step title="Inherit from phone.validation.mixin (recommended)">
+    `phone.validation.mixin` provides the `phone_format` helper and country resolution logic. Inheriting it is not required for registry inclusion — only `_phone_name_sequence` and `_phone_name_fields` are checked — but it is the recommended pattern and gives your model consistent phone formatting behavior.
+  </Step>
+  <Step title="Set the two required attributes">
+    Choose a sequence number higher than `10` (which is reserved for `res.partner`) and list the field names that store phone numbers on your model.
+  </Step>
+  <Step title="Ensure the phone fields exist on the model">
+    The field names in `_phone_name_fields` must correspond to actual columns in the model's database table. The registry performs raw SQL queries against these columns.
+  </Step>
+</Steps>
+
+### Full working example
+
+The following example registers a custom `my_module.service_contract` model so that incoming calls can be matched against a `phone` field on service contracts.
+
+```python
+# my_module/models/service_contract.py
+from odoo import fields, models
+
+
+class ServiceContract(models.Model):
+    _name = "my_module.service_contract"
+    _description = "Service Contract"
+    _inherit = ["my_module.service_contract", "phone.validation.mixin"]
+
+    # Search after res.partner (10) but before lower-priority models
+    _phone_name_sequence = 20
+    _phone_name_fields = ["phone"]
+
+    name = fields.Char(string="Contract Reference", required=True)
+    phone = fields.Char(string="Contact Phone")
+    partner_id = fields.Many2one("res.partner", string="Customer")
+```
+
+```python
+# my_module/__manifest__.py
+{
+    "name": "My Module",
+    "version": "18.0.1.0.0",
+    "depends": ["base_phone"],
+    "license": "AGPL-3",
+}
+```
+
+<Note>
+  If `partner_id` is set on the record, `phone.validation.mixin` uses `partner_id.country_id` when formatting phone numbers. If your model has a direct `country_id` field, that takes priority.
+</Note>
+
+### CRM lead example
+
+`crm.lead` is a common model to extend. The pattern is the same:
+
+```python
+# In a module that depends on both base_phone and crm
+from odoo import models
+
+
+class CrmLead(models.Model):
+    _name = "crm.lead"
+    _inherit = ["crm.lead", "phone.validation.mixin"]
+
+    _phone_name_sequence = 30
+    _phone_name_fields = ["phone", "mobile"]
+```
+
+<Warning>
+  The field names in `_phone_name_fields` are used directly in a raw SQL `LIKE` query. Only include fields that actually exist as database columns on the model. Computed fields stored without a database column will cause a SQL error.
+</Warning>
+
+## Attribute reference
+
+| Attribute | Type | Required | Description |
+|---|---|---|---|
+| `_phone_name_sequence` | `int` | Yes | Search priority. Lower values are searched first. `res.partner` uses `10`. |
+| `_phone_name_fields` | `list[str]` | Yes | Database column names containing phone numbers to match against. |
+
+<Tip>
+  To verify your model is registered, call `self.env['phone.common']._get_phone_models()` in a debug shell. The returned list shows every registered model in search order.
+</Tip>

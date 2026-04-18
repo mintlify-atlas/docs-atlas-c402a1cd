@@ -1,0 +1,225 @@
+---
+title: "base_phone: automatic phone number validation module"
+description: "The base_phone module auto-formats phone numbers to E.164 standard on create/write, provides caller ID lookup, and shared methods for telephony connectors."
+---
+
+`base_phone` extends Odoo's built-in `phone_validation` module to apply E.164 phone number reformatting on every `create()` and `write()` call, not just on form saves. It uses the [`phonenumbers`](https://github.com/daviddrysdale/python-phonenumbers) Python library — the same library used in Android — to parse and normalize phone numbers for any country. It also provides shared abstract models and a configuration wizard used by downstream telephony connectors such as the Asterisk connector.
+
+**Version:** 18.0.1.0.0 · **License:** AGPL-3
+
+<CardGroup cols={2}>
+  <Card title="E.164 auto-formatting" icon="phone">
+    Reformats phone numbers on `create()` and `write()`, not just on UI save. A French number entered as `01-55-42-12-42` becomes `+33155421242`.
+  </Card>
+  <Card title="Phone model registry" icon="database">
+    A discoverable registry (`_phone_name_sequence`, `_phone_name_fields`) lets any Odoo model participate in caller-ID lookup without hardcoded model references.
+  </Card>
+  <Card title="Caller-ID lookup" icon="address-book">
+    `phone.common` provides `get_record_from_phone_number` to resolve an incoming number to a partner, lead, or any registered model record.
+  </Card>
+  <Card title="Reformat wizard" icon="wand-magic-sparkles">
+    A one-shot wizard (`reformat.all.phonenumbers`) re-normalizes every phone field across all registered models in a single operation.
+  </Card>
+</CardGroup>
+
+## Dependencies
+
+| Type | Dependency |
+|------|-----------|
+| Odoo module | `phone_validation` |
+| Odoo module | `base_setup` |
+| Python package | `phonenumbers` |
+
+Install the Python library before installing the module:
+
+```bash
+pip install phonenumbers
+```
+
+## How phone reformatting works
+
+When a record is created or written, `PhoneValidationMixin.phone_format()` is called for each phone field. It resolves the country from the record (via `country_id`, `partner_id.country_id`, or the active company) and then delegates to Odoo's `phone_validation.phone_format()` with `force_format="INTERNATIONAL"`.
+
+```python
+# base_phone/models/phone_validation_mixin.py
+def phone_format(self, number, country=None, company=None):
+    country = country or self._phone_validation_get_country()
+    if not country:
+        return number
+    return phone_validation.phone_format(
+        number,
+        country.code if country else None,
+        country.phone_code if country else None,
+        force_format="INTERNATIONAL",
+        raise_exception=False,
+    )
+```
+
+The country resolution priority is:
+
+1. `country_id` on the record itself (if the field exists and is set)
+2. `partner_id.country_id` (if the record has a partner relation)
+3. `env.company.country_id` as the fallback
+
+<Note>
+If no country can be resolved, the number is returned unchanged. No error is raised, so an unresolvable number silently passes through without reformatting.
+</Note>
+
+## Key models
+
+### `phone.common` (abstract)
+
+`phone.common` is an abstract model (`_name = "phone.common"`) that holds the shared class methods used by telephony connectors to resolve caller IDs and initiate calls.
+
+#### `get_name_from_phone_number(presented_number)`
+
+Convenience wrapper around `get_record_from_phone_number`. Returns the display name string if a matching record is found, or `False`.
+
+```python
+name = env["phone.common"].get_name_from_phone_number("+33155421242")
+# Returns: "Akretion" (or False if not found)
+```
+
+#### `get_record_from_phone_number(presented_number)`
+
+Searches all registered phone models for a record whose phone or mobile field ends with the trailing digits of `presented_number`. The number of digits matched from the end is configured on the company (`number_of_digits_to_match_from_end`).
+
+Returns a 3-tuple `(model_name, record_id, display_name)` on success, or `False` if no match is found.
+
+```python
+result = env["phone.common"].get_record_from_phone_number("0155421242")
+# Returns: ('res.partner', 42, 'Alexis de Lattre (Akretion)')
+```
+
+The search iterates over models in `_phone_name_sequence` order, so lower sequence numbers are checked first. If multiple records match, the first is used and a warning is logged.
+
+#### `click2dial(erp_number)`
+
+Intended to be overridden by IPBX-specific modules (e.g. `asterisk_click2dial`). The base implementation simply returns the number unchanged:
+
+```python
+def click2dial(self, erp_number):
+    return {"dialed_number": erp_number}
+```
+
+#### `convert_to_dial_number(erp_number)`
+
+Converts an E.164 number stored in Odoo to a dialable format appropriate for the active company's country. Strips spaces, dashes, dots, parentheses, and slashes.
+
+```python
+to_dial = env["phone.common"].convert_to_dial_number("+33155421242")
+# Returns: "0033155421242" (for a French company dialing internationally)
+```
+
+Override this method in a company-specific module if your PBX requires a different format.
+
+### `phone.validation.mixin` (abstract)
+
+A lightweight mixin that adds `phone_format()` and `_phone_validation_get_country()` to any model. Inherit it alongside your model to get automatic reformatting:
+
+```python
+class MyModel(models.Model):
+    _name = "my.model"
+    _inherit = ["my.model", "phone.validation.mixin"]
+    _phone_name_sequence = 20
+    _phone_name_fields = ["phone", "mobile"]
+```
+
+## Phone model registry
+
+The registry is how `phone.common` discovers which models have phone fields without requiring hardcoded imports or configuration.
+
+Any model that sets both class attributes participates automatically:
+
+| Attribute | Type | Purpose |
+|-----------|------|---------|
+| `_phone_name_sequence` | `int` | Search priority. Lower numbers are searched first. |
+| `_phone_name_fields` | `list[str]` | Field names containing phone numbers on this model. |
+
+`base_phone` registers `res.partner` out of the box:
+
+```python
+# base_phone/models/res_partner.py
+class ResPartner(models.Model):
+    _name = "res.partner"
+    _inherit = ["res.partner", "phone.validation.mixin"]
+    _phone_name_sequence = 10
+    _phone_name_fields = ["phone", "mobile"]
+```
+
+A module adding CRM leads to the registry would look like:
+
+```python
+class CrmLead(models.Model):
+    _inherit = "crm.lead"
+    _phone_name_sequence = 20
+    _phone_name_fields = ["phone", "mobile"]
+```
+
+The `_get_phone_models()` method on `phone.common` iterates all models in the Odoo registry at runtime, filters those that have both attributes set to the correct types, and returns them sorted by `_phone_name_sequence`.
+
+<Tip>
+Use a `_phone_name_sequence` value of 10 for contacts (highest priority), 20 for leads, 30 for other models. Gaps leave room for future modules to insert between existing ones.
+</Tip>
+
+## Caller-ID display name
+
+`base_phone` overrides `_compute_display_name` on `res.partner` when the `callerid` context key is set. In that context, a contact's name is rendered as `"Company Name, Contact Name"` rather than the standard `"Contact Name (Company Name)"` format — a format friendlier for display on phone screens.
+
+```python
+# Returns "Akretion, Alexis de Lattre" in callerid context
+partner.with_context(callerid=True).display_name
+```
+
+## Configuration wizard
+
+The **Reformat all phone numbers** wizard (`reformat.all.phonenumbers`) iterates every record in every registered phone model and re-applies `phone_format()` to each phone field, writing back only when the reformatted value differs from the stored value. Inactive records are included.
+
+Access it via **Settings → Technical → Phone → Reformat all phone numbers**.
+
+<Steps>
+  <Step title="Open the wizard">
+    Navigate to **Settings → Technical → Phone → Reformat all phone numbers** (requires debug mode).
+  </Step>
+  <Step title="Run the reformatting">
+    Click **Reformat** to process all registered models. The wizard reports any numbers that could not be reformatted.
+  </Step>
+  <Step title="Review results">
+    Numbers that failed reformatting (e.g. invalid formats with no resolvable country) are listed in the **Phone numbers that couldn't be reformatted** field.
+  </Step>
+</Steps>
+
+<Warning>
+The wizard writes directly to the database for all matching records. Run it during a maintenance window or on a database backup first if your dataset is large.
+</Warning>
+
+## Extending `base_phone`
+
+To add phone number lookup support to a custom model:
+
+```python
+from odoo import models
+
+class MyCustomModel(models.Model):
+    _name = "my.custom.model"
+    _inherit = ["my.custom.model", "phone.validation.mixin"]
+
+    # Register in the phone model lookup registry
+    _phone_name_sequence = 30          # search priority (lower = first)
+    _phone_name_fields = ["phone"]     # fields that store phone numbers
+```
+
+To override how numbers are formatted before dialing:
+
+```python
+from odoo import api, models
+
+class PhoneCommon(models.AbstractModel):
+    _inherit = "phone.common"
+
+    @api.model
+    def convert_to_dial_number(self, erp_number):
+        # Strip the leading + for a legacy PBX that dials 0033...
+        number = super().convert_to_dial_number(erp_number)
+        return number.lstrip("+")
+```

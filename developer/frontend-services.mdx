@@ -1,0 +1,406 @@
+---
+title: "voip_oca and voip_agent_oca service API reference"
+description: "Full reference for the VoipOCA reactive state service, VoipAgent SIP.js bridge, and the OWL component tree that powers the Odoo softphone widget."
+---
+
+`voip_oca` ships two Odoo services that together own all frontend VOIP behaviour. `voip_oca` is the reactive state container; `voip_agent_oca` is the SIP.js bridge that handles WebSocket registration and call signalling. OWL components read from and write to these services to render the softphone UI.
+
+## VoipOCA service (`voip_oca`)
+
+### Registration
+
+The service is registered in Odoo's service registry under the key `"voip_oca"`:
+
+```javascript voip_oca_service.esm.js
+export const voipOCAService = {
+    dependencies: ["mail.store", "orm"],
+    async start() {
+        return new VoipOCA(...arguments);
+    },
+};
+
+registry.category("services").add("voip_oca", voipOCAService);
+```
+
+The `start()` function returns a `VoipOCA` instance wrapped in OWL's `reactive()`, so any property assignment triggers re-renders in all subscribing components.
+
+### State properties
+
+| Property | Type | Initial value | Description |
+|---|---|---|---|
+| `status` | `string` | `"disconnected"` | SIP connection state: `"disconnected"`, `"connecting"`, or `"connected"` |
+| `isOpened` | `boolean` | `false` | Whether the softphone panel is visible |
+| `isFolded` | `boolean` | `false` | Whether the panel is collapsed to its header bar |
+| `selectedTab` | `string` | `"activity_list"` | Key of the active tab in the softphone |
+| `numpadTab` | `boolean` | `false` | Whether the numpad is the active input mode |
+| `call` | `Call \| false` | `false` | The current active `voip.call` record, or `false` |
+| `partner` | `Object \| false` | `false` | Formatted partner object for the current call/activity |
+| `activity` | `Object \| false` | `false` | The mail activity that triggered this call session |
+| `inCall` | `boolean` | `false` | `true` while a SIP session is established or incoming |
+| `searchValue` | `string` | `""` | Current search input value, used to filter list views |
+| `numpad` | `Object` | `{ isOpen, value, selection }` | Numpad state: open flag, current digit string, cursor selection |
+
+PBX connection parameters (`pbx_ws`, `pbx_username`, `pbx_password`, `pbx_domain`, `pbx_id`, `mode`, `tones`) are copied from `session.voip` during construction and then removed from the session object, so they are never accessible from outside the service after startup.
+
+### Reactivity
+
+The constructor returns `reactive(this)` instead of the bare instance:
+
+```javascript voip_oca_service.esm.js
+constructor(env, services) {
+    // ... property setup ...
+    return reactive(this);
+}
+```
+
+This means any direct property write (`this.voip.isOpened = true`) automatically schedules a re-render for every OWL component that read that property during its last render. No events or explicit subscriptions are needed.
+
+### UI control methods
+
+```javascript
+// Toggle the softphone open/closed. Opening always unfolds it first.
+voip.handleVoip()
+
+// Toggle the panel between expanded and folded (header-bar only).
+voip.handleFold()
+```
+
+### open() — loading a call context
+
+`open()` populates the service with the partner, activity, and call objects for the current session. It resolves the partner ID from whichever context object is provided, then fetches formatted partner data via RPC.
+
+```javascript
+// Open with a partner
+await voip.open({ partner: { id: 42 } });
+
+// Open with a mail.activity
+await voip.open({ activity: activityRecord });
+
+// Open with an existing voip.call
+await voip.open({ call: callRecord });
+```
+
+Internally it calls `res.partner::format_partner([partner_id])` to fetch a normalised partner object compatible with the softphone components.
+
+### Call lifecycle methods
+
+```javascript
+// Accept an incoming call: calls voip.call::accept_call and updates the
+// local call record with the returned data (start_date, state → "ongoing").
+await voip.acceptCall();
+
+// Reject an incoming call: calls voip.call::reject_call, clears
+// this.inCall and this.call.
+await voip.rejectCall();
+```
+
+<Note>
+  These methods update the server record and the local reactive state together. Components do not need to make separate ORM calls when accepting or rejecting.
+</Note>
+
+### Computed list getters
+
+These getters filter the mail store records in memory using the current `searchValue`. They are computed properties — no RPC is issued on access.
+
+```javascript
+// Returns Persona records that have a phone number, optionally filtered
+// by name/displayName/mobileNumber/landlineNumber.
+voip.partners   // → Persona[]
+
+// Returns Activity records where:
+//   - category is "phonecall"
+//   - deadline is today or past
+//   - assigned to the current user
+//   - name/resName/main_partner match searchValue
+voip.activities // → Activity[]
+
+// Returns Call records sorted by date descending,
+// optionally filtered by phoneNumber/displayName.
+voip.calls      // → Call[]
+```
+
+### Search methods (RPC)
+
+The search methods fetch records from the server and insert them into the mail store. They are called by the softphone's debounced search handler.
+
+```javascript
+// Fetch contacts with phone numbers (calls res.partner::voip_get_contacts)
+await voip.searchPartners(_search, offset, limit);
+
+// Fetch phonecall activities (calls mail.activity::get_call_activities)
+await voip.searchActivities(_search, offset, limit);
+
+// Fetch recent call records (calls voip.call::get_recent_calls)
+await voip.searchCalls(_search, offset, limit);
+```
+
+All three accept `_search` (string), `offset` (int), and `limit` (int, default 13). Results are inserted into the relevant mail store record class (`Persona`, `Activity`, or `Call`) rather than returned directly.
+
+### Utility methods
+
+```javascript
+// Returns a URL for the partner's avatar_128 image
+voip.imagePartner(partner_id) // → "/web/image?model=res.partner&id=42&field=avatar_128"
+```
+
+---
+
+## voip_agent_oca service (`VoipAgent`)
+
+### Registration
+
+```javascript voip_agent_service.esm.js
+export const voipAgentOCAService = {
+    dependencies: ["voip_oca", "multi_tab", "notification", "orm", "mail.store"],
+    async start() {
+        return new VoipAgent(...arguments);
+    },
+};
+
+registry.category("services").add("voip_agent_oca", voipAgentOCAService);
+```
+
+The agent depends on `voip_oca` (the state service), `multi_tab` (to gate ringtone playback to the main browser tab), `notification`, `orm`, and `mail.store`.
+
+### Startup and SIP registration
+
+`connectAgent()` runs automatically during `start()`. It:
+
+1. Checks `voip.mode` — if not `"prod"`, logs an info message and returns without connecting.
+2. Checks browser WebRTC support (`navigator.mediaDevices.getUserMedia` and `window.MediaStream`).
+3. Validates that `pbx_ws`, `pbx_username`, and `pbx_password` are all present.
+4. Calls `loadBundle("voip_oca.agent_assets")` to fetch SIP.js on demand.
+5. Creates `new SIP.UserAgent(agentConfig)` and calls `agent.start()`.
+6. Creates a `SIP.Registerer` and registers with the PBX.
+7. Sets `voip.status = "connected"` on success.
+
+### SIP UserAgent configuration
+
+```javascript voip_agent_service.esm.js
+get agentConfig() {
+    return {
+        authorizationPassword: this.voip.pbx_password,
+        authorizationUsername: this.voip.pbx_username,
+        delegate: {
+            onCallHangup: () => { this.voip.inCall = false; },
+            onInvite: this.onInvite.bind(this),
+            onDisconnect: this._onDisconnect.bind(this),
+        },
+        logBuiltinEnabled: odoo.debug !== "",
+        logLevel: odoo.debug === "" ? "error" : "debug",
+        transportOptions: {
+            server: this.voip.pbx_ws,   // e.g. "wss://pbx.example.com:8089/ws"
+        },
+        uri: SIP.UserAgent.makeURI(
+            `sip:${this.voip.pbx_username}@${this.voip.pbx_domain}`
+        ),
+        userAgentString: `OCA SIP.js/${window.SIP.version}`,
+    };
+}
+```
+
+SIP debug logging is automatically enabled when Odoo debug mode is active.
+
+### Outbound calls
+
+```javascript
+// Place an outbound call. Provide a number, a partner, or both.
+await agent.call({ number: "+34911234567" });
+await agent.call({ partner: personaRecord });
+await agent.call({ number: "+34911234567", partner: personaRecord });
+```
+
+`call()` opens the softphone, creates the server `voip.call` record, plays a dial tone, then constructs a `SIP.Inviter` and sends the INVITE. Digits are stripped of non-numeric characters before being used as the SIP URI user part.
+
+### Inbound calls
+
+When the PBX sends a SIP INVITE the `onInvite(session)` delegate fires:
+
+1. If `this.session` is already set (agent is busy), rejects the new invite with `486 Busy Here`.
+2. Creates a server `voip.call` record with `type_call: "incoming"`, `state: "calling"`.
+3. Sets `voip.inCall = true`, opens and unfolds the softphone.
+4. Plays the calltone (on the main tab only, checked via `multi_tab.isOnMainTab()`).
+5. Attaches state-change and BYE/Cancel delegates.
+
+### In-call actions
+
+| Method | Description |
+|---|---|
+| `agent.hangup()` | Ends the call. Cancels, rejects, or BYEs depending on session state. Always calls `terminate_call` on the server. |
+| `agent.accept()` | Accepts an incoming SIP session and calls `voip.acceptCall()`. |
+| `agent.mute()` | Toggles microphone track on/off via `enableSenderTracks`. |
+| `agent.hold()` | Sends a re-INVITE with `hold: true/false` via `sessionDescriptionHandlerOptions`. |
+| `agent.transfer(number)` | Sends a SIP REFER to blind-transfer the call; calls `session.bye()` on accept. |
+
+### Reconnection
+
+If the WebSocket disconnects with an error, `_onDisconnect` fires and schedules `reconnectAgent()`. Retries use exponential backoff: 1 s, 5 s, 25 s, 125 s, 625 s (5^attempt). After 5 failed attempts the user is notified to reload.
+
+### State properties
+
+| Property | Type | Description |
+|---|---|---|
+| `session` | `SIP.Session \| false` | Active SIP session, `false` when idle |
+| `isMuted` | `boolean` | Whether the microphone is muted |
+| `isHolded` | `boolean` | Whether the call is on hold |
+| `registererState` | `string` | Last state from `SIP.Registerer.stateChange` |
+
+---
+
+## OWL component tree
+
+```
+VoipOCASystray              systray registry: "voip_systray_oca"
+└── VoipOCASoftphone        main_components registry: "voip_oca.VoipOCASoftphone"
+    ├── Call                Active call panel (inbound + outbound)
+    │   ├── Numpad          In-call DTMF pad (sends DTMF via sessionDescriptionHandler)
+    │   └── Transfer        Popover for blind transfer (usePopover)
+    ├── Partner             Contact detail sidebar
+    ├── ActivityList        Pending phonecall activities (voip_elements registry)
+    ├── CallList            Recent call history (voip_elements registry)
+    ├── PartnerList         Contact search results (voip_elements registry)
+    └── PhoneField patch    Intercepts click on standard phone fields
+```
+
+### VoipOCASystray
+
+Registered in the `systray` registry. Renders the VOIP icon in the top navigation bar. Calls `voip_oca.handleVoip()` on click to toggle the softphone.
+
+```javascript voip_oca_systray.esm.js
+export class VoipOCASystray extends Component {
+    setup() {
+        this.voip_oca = useState(useService("voip_oca"));
+    }
+    onClick() {
+        this.voip_oca.handleVoip();
+    }
+}
+registry.category("systray").add("voip_systray_oca", { Component: VoipOCASystray });
+```
+
+### VoipOCASoftphone
+
+Registered as a `main_component` so it is always mounted. Reads the active tab from `voip.selectedTab` and renders the corresponding component from the `voip_elements` registry. The search input is debounced (300 ms) and routed to the active tab's `search` function.
+
+Exposes call controls: the green call button, the numpad toggle, fold/unfold, and close.
+
+### Call
+
+Displays active call information (partner name, phone number, call timer) and controls (accept, hangup, mute, hold, numpad, transfer, email, schedule activity). The timer is a `setInterval` that increments a local `elapsedSeconds` counter once per second. Transfer uses `usePopover(Transfer)` anchored to the transfer button.
+
+### Partner
+
+Shows the resolved contact's name, avatar, and actions (call, email, open record, schedule activity, mark activity done, delete activity). Can operate in three contexts: a plain partner, a `mail.activity`-initiated session, or a `voip.call`-initiated session.
+
+### PhoneField patch
+
+Patches `PhoneField.prototype` to intercept the phone link click event. If the `voip_agent_oca` service has an active SIP agent, it calls `agent.call({ number })` instead of opening the `tel:` URI:
+
+```javascript phone_field.esm.js
+patch(PhoneField.prototype, {
+    setup() {
+        super.setup();
+        this.agent = useService("voip_agent_oca");
+    },
+    onPhoneClick(ev) {
+        if (!this.agent.agent) {
+            return; // fall through to default tel: behaviour
+        }
+        ev.preventDefault();
+        ev.stopPropagation();
+        this.agent.call({ number: this.props.record.data[this.props.name] });
+    },
+});
+```
+
+---
+
+## Using the service in a custom OWL component
+
+Access `voip_oca` with `useService` and wrap the result in `useState` so your component re-renders when state changes:
+
+```javascript my_component.esm.js
+import { Component, useState } from "@odoo/owl";
+import { useService } from "@web/core/utils/hooks";
+
+export class MyVoipButton extends Component {
+    setup() {
+        // useState is required to subscribe this component to reactive changes
+        this.voip = useState(useService("voip_oca"));
+        this.agent = useService("voip_agent_oca");
+    }
+
+    get isConnected() {
+        return this.voip.status === "connected";
+    }
+
+    async onCallClick() {
+        if (!this.isConnected) {
+            return;
+        }
+        // Open the softphone pre-populated with a partner
+        await this.voip.open({ partner: { id: this.props.partnerId } });
+        this.voip.isOpened = true;
+    }
+
+    onDirectDial() {
+        // Bypass the softphone and dial immediately
+        this.agent.call({ number: this.props.phoneNumber });
+    }
+}
+
+MyVoipButton.props = {
+    partnerId: { type: Number },
+    phoneNumber: { type: String },
+};
+MyVoipButton.template = "my_module.MyVoipButton";
+```
+
+<Warning>
+  Always use `useState(useService("voip_oca"))` rather than `useService("voip_oca")` alone. Without `useState`, OWL will not track property reads on the reactive proxy and your component will not update when the call state changes.
+</Warning>
+
+### Placing an outbound call programmatically
+
+```javascript
+// Simplest case — dial by number
+this.agent.call({ number: "+34911234567" });
+
+// Dial from a partner record in the mail store
+const partner = this.env.services["mail.store"].Persona.get({ id: 42 });
+this.agent.call({ partner });
+
+// Pre-populate the softphone with an activity context before dialling
+await this.voip.open({ activity: activityRecord });
+this.agent.call({
+    number: activityRecord.phone_number,
+    partner: { id: activityRecord.main_partner_id[0] },
+});
+```
+
+### Extending the softphone with a new tab
+
+Register an entry in the `voip_elements` registry. The softphone reads this registry to discover tabs, their display labels, list data, and search functions:
+
+```javascript my_module_tab.esm.js
+import { registry } from "@web/core/registry";
+import { MyCustomList } from "./my_custom_list.esm";
+
+registry.category("voip_elements").add("my_custom_tab", {
+    label: "Custom",          // Tab header label
+    order: 40,                // Position relative to other tabs
+    component: MyCustomList,  // OWL component to render in the tab body
+    input: "myItems",         // Property name on the voip_oca service to pass as `records`
+    search: async (voip, value) => {
+        // Called by the softphone's debounced search handler
+        voip.searchValue = value || "";
+    },
+    call: (voip) => {
+        // Called when the user presses the call button with this tab active
+    },
+});
+```
+
+<Tip>
+  Set `input: false` and omit `search` if your tab does not need a search bar or a records list passed as props.
+</Tip>

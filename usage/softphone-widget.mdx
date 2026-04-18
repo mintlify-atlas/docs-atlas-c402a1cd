@@ -1,0 +1,91 @@
+---
+title: "Voip OCA softphone widget: tabs, search, and actions"
+description: "Navigate the Voip OCA softphone panel in Odoo — open, fold, search contacts, view call history, and manage call activities without leaving your page."
+---
+
+The softphone widget is the central interface for all VoIP activity in Odoo. It floats in the bottom-left corner of the screen and gives you access to recent calls, pending call activities, and your contact list — all without leaving your current page.
+
+## Opening and closing the widget
+
+Click the **VoIP** icon in the top systray bar (the telephone icon next to notifications) to open or close the widget.
+
+<Note>
+  When you first open Odoo, the system automatically logs into the PBX server using your user credentials. On test environments, this login is skipped and the SIP libraries are not loaded.
+</Note>
+
+### Widget states
+
+The widget operates in three states:
+
+| State | Description |
+|-------|-------------|
+| **Open** | Fully visible with tabs, search, and content |
+| **Folded** | Header bar visible but content is hidden; SIP session remains active |
+| **Closed** | Widget dismissed entirely via the × button |
+
+To toggle between open and folded, click anywhere on the widget's header bar. To close the widget completely, click the **×** button on the right side of the header.
+
+The header also shows a colored status indicator dot that reflects your current SIP connection state (connected, disconnected, etc.).
+
+## Tabs
+
+When the widget is open and no contact or numpad view is active, three tabs are shown:
+
+<CardGroup cols={3}>
+  <Card title="Recent Calls" icon="phone">
+    A chronological list of all calls you have made or received, with date, time, status, and duration for each entry.
+  </Card>
+  <Card title="Call Activities" icon="clock">
+    Phone call activities assigned to you across any Odoo document (leads, sales orders, etc.) that are overdue or due today.
+  </Card>
+  <Card title="Contacts" icon="user">
+    All partners stored in Odoo that have a phone number set, for quick access and dialing.
+  </Card>
+</CardGroup>
+
+## Search
+
+A search bar appears above the tabs. Typing in this field filters results across whichever tab is currently active:
+
+- **Recent Calls** — matches against phone number, partner name, or associated activity name
+- **Call Activities** — matches against the related record name, activity summary, or deadline
+- **Contacts** — matches against partner name, display name, mobile number, or landline number
+
+The search is case-insensitive and uses partial matching.
+
+## Partner view
+
+Clicking any entry in the three tabs opens a partner view within the widget. This shows the contact's avatar, name, and phone number.
+
+From this view you can perform the following actions:
+
+<Steps>
+  <Step title="Send an email">
+    Opens the Odoo email compose dialog pre-addressed to the partner.
+  </Step>
+  <Step title="Open partner form">
+    Opens the partner's full record in a new window (only available when the partner exists in Odoo).
+  </Step>
+  <Step title="Schedule an activity">
+    Opens the activity creation form linked to the partner.
+  </Step>
+</Steps>
+
+### Unknown contacts
+
+If a recent call was made to or received from a number that is not linked to any Odoo partner, the widget shows "No contact info" in place of the avatar and name. The **Open partner form** button is replaced by a **+** (new contact) button, which opens the partner creation form pre-filled with the phone number.
+
+## Activity section actions
+
+When you open a partner view via the **Call Activities** tab, an additional "Related activity" section appears below the standard actions, with four buttons:
+
+| Action | Description |
+|--------|-------------|
+| **Go to document** | Opens the related Odoo record (e.g., CRM lead, sale order) |
+| **Mark as done** | Marks the activity as completed |
+| **Edit activity** | Opens the activity form for editing |
+| **Cancel activity** | Removes the activity without marking it done |
+
+## Auto-open on incoming calls
+
+When an incoming SIP call arrives, the widget opens automatically. Odoo looks up the caller's number against stored partner phone and mobile fields, then displays the matching partner's name and details — or just the phone number if no match is found.

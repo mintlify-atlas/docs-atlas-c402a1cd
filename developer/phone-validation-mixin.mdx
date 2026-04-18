@@ -1,0 +1,134 @@
+---
+title: "phone.validation.mixin — add phone_format() to any model"
+description: "API reference for phone.validation.mixin: inherit it to add phone_format() and automatic country-aware E.164 phone number normalization to any Odoo model."
+---
+
+`phone.validation.mixin` is an abstract Odoo model (`models.AbstractModel`) defined in `base_phone`. Inherit it to add standardized phone number formatting to any model. It wraps Odoo's built-in `phone_validation.phone_format` utility with automatic country resolution and always outputs numbers in `INTERNATIONAL` format.
+
+---
+
+## Methods
+
+### `phone_format`
+
+<ParamField path="number" type="string" required>
+  The raw phone number string to format, as entered by the user. May be in any format (local, national, or international).
+</ParamField>
+
+<ParamField path="country" type="res.country record">
+  An optional `res.country` record to use for parsing. When omitted, the country is resolved by `_phone_validation_get_country()`.
+</ParamField>
+
+<ParamField path="company" type="res.company record">
+  Reserved parameter accepted for API compatibility. Currently unused — country resolution falls back to the company's country via `_phone_validation_get_country()`, not this argument directly.
+</ParamField>
+
+**Returns** `string`
+
+Formats `number` into `INTERNATIONAL` format (e.g. `"+33 1 42 00 01 02"`). If no country can be resolved, the number is returned unchanged. Parsing errors are suppressed (`raise_exception=False`), so malformed numbers are also returned as-is.
+
+Internally delegates to:
+
+```python
+phone_validation.phone_format(
+    number,
+    country.code if country else None,
+    country.phone_code if country else None,
+    force_format="INTERNATIONAL",
+    raise_exception=False,
+)
+```
+
+---
+
+### `_phone_validation_get_country`
+
+Internal helper with no parameters. Returns a `res.country` record or `False`.
+
+Country is resolved in this priority order:
+
+1. **Record's own `country_id`** — if the model has a `country_id` field and it is set.
+2. **Partner's country** — if the model has a `partner_id` field, that partner has a `country_id`, and it is set.
+3. **Company country** — `self.env.company.country_id` as the final fallback.
+
+```python
+def _phone_validation_get_country(self):
+    if "country_id" in self and self.country_id:
+        return self.country_id
+    if "partner_id" in self and self.partner_id and self.partner_id.country_id:
+        return self.partner_id.country_id
+    return self.env.company.country_id
+```
+
+<Note>
+  You can override `_phone_validation_get_country()` in your model to implement custom country resolution logic without changing `phone_format` itself.
+</Note>
+
+---
+
+## Using the mixin in a custom model
+
+<Steps>
+  <Step title="Inherit the mixin">
+    Add `phone.validation.mixin` to your model's `_inherit` list alongside your primary model name.
+
+    ```python
+    from odoo import fields, models
+
+    class ServiceRequest(models.Model):
+        _name = "service.request"
+        _inherit = ["service.request", "phone.validation.mixin"]
+        _description = "Service Request"
+
+        phone = fields.Char(string="Phone")
+        country_id = fields.Many2one("res.country", string="Country")
+    ```
+  </Step>
+
+  <Step title="Call phone_format on write or compute">
+    Use `phone_format` inside a `@api.onchange`, a `create`/`write` override, or a compute method to normalize numbers before they are stored.
+
+    ```python
+    from odoo import api, fields, models
+
+    class ServiceRequest(models.Model):
+        _name = "service.request"
+        _inherit = ["service.request", "phone.validation.mixin"]
+        _description = "Service Request"
+
+        phone = fields.Char(string="Phone")
+        country_id = fields.Many2one("res.country", string="Country")
+
+        @api.model_create_multi
+        def create(self, vals_list):
+            records = super().create(vals_list)
+            for record in records:
+                if record.phone:
+                    record.phone = record.phone_format(record.phone)
+            return records
+
+        def write(self, vals):
+            res = super().write(vals)
+            if "phone" in vals or "country_id" in vals:
+                for record in self:
+                    if record.phone:
+                        record.phone = record.phone_format(record.phone)
+            return res
+    ```
+  </Step>
+
+  <Step title="Override country resolution (optional)">
+    If your model uses a different field for the country (e.g. `shipping_country_id`), override `_phone_validation_get_country`:
+
+    ```python
+    def _phone_validation_get_country(self):
+        if self.shipping_country_id:
+            return self.shipping_country_id
+        return super()._phone_validation_get_country()
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  Because `raise_exception=False` is always passed, `phone_format` never raises on a malformed number — it returns the input string unchanged. If you need to validate that a number is well-formed before saving, call `phonenumbers.parse()` separately and handle the `NumberParseException`.
+</Tip>

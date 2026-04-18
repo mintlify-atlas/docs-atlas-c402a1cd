@@ -1,0 +1,60 @@
+---
+title: "OCA Connector Telephony: Odoo Telephony Integration Modules"
+description: "Learn what OCA Connector Telephony provides — phone validation, WebRTC softphone, PBX integration, and call tracking for Odoo 18."
+---
+
+OCA Connector Telephony is a collection of open-source Odoo modules maintained by the [Odoo Community Association (OCA)](https://odoo-community.org/). The modules bring telephony capabilities into Odoo 18 — from automatic phone number formatting to a full in-browser SIP softphone — without requiring any proprietary add-ons.
+
+<Note>
+  These modules target **Odoo 18.0** only. The `voip_oca` module additionally requires a PBX server that supports WebRTC/WebSocket connections as defined in [RFC 7118](https://datatracker.ietf.org/doc/html/rfc7118).
+</Note>
+
+## Modules
+
+<CardGroup cols={2}>
+  <Card title="base_phone" icon="phone" href="/modules/base-phone">
+    Validates and auto-formats phone numbers to the E.164 international standard on every `create()` and `write()` call, using the `phonenumbers` Python library. Extends Odoo's built-in `phone_validation` module. Useful on its own even without VOIP.
+  </Card>
+  <Card title="voip_oca" icon="headset" href="/modules/voip-oca">
+    Embeds a SIP.js-powered softphone widget into the Odoo UI. Connects directly from the browser to your PBX server over WebSocket. Supports making and receiving calls, viewing call history, managing call activities, and quick-dialing contacts — all without leaving Odoo.
+  </Card>
+</CardGroup>
+
+## What problems these modules solve
+
+**Phone number inconsistency** is a common data quality problem in Odoo. Users enter numbers in many local formats — `01-55-42-12-42`, `(555) 867-5309`, `+44 20 7946 0958` — making them hard to search, deduplicate, or pass to external telephony systems. `base_phone` normalises every phone field to E.164 format automatically on save, regardless of the user's input format, by detecting the country from the partner or company record.
+
+**Context-switching between a desk phone and Odoo** slows down sales and support teams. `voip_oca` eliminates this by loading a SIP stack directly in the browser (via SIP.js) and connecting it to your PBX over WebSocket. Users can click any phone number shown in green in the partner view to dial immediately, or use the softphone widget's numpad for manual dialing.
+
+## Supported VOIP providers
+
+`voip_oca` uses the standard SIP-over-WebSocket protocol (RFC 7118), so it works with any compliant PBX. The following providers have been confirmed to work:
+
+| Provider | Status |
+|---|---|
+| [Zerovoz](https://zerovoz.com/) | Tested |
+| [Ringover](https://www.ringover.es/) | Tested |
+| Axivox | Expected to work |
+| OnSIP | Expected to work |
+
+Any PBX that exposes a WebSocket SIP endpoint should be compatible, including self-hosted solutions such as Asterisk or FreeSWITCH when configured with a WebSocket transport.
+
+## License and OCA context
+
+Both modules are licensed under **AGPL-3.0**. They are maintained as part of the [OCA/connector-telephony](https://github.com/OCA/connector-telephony) repository on GitHub. The OCA is a nonprofit that coordinates community development of Odoo extensions and ensures long-term maintenance.
+
+| Module | Version | Maintainer |
+|---|---|---|
+| `base_phone` | 18.0.1.0.0 | [@alexis-via](https://github.com/alexis-via) |
+| `voip_oca` | 18.0.1.0.2 | [@etobella](https://github.com/etobella) |
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install both modules into your Odoo instance, including Python dependencies.
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Configure your PBX server and make your first call in under 10 minutes.
+  </Card>
+</CardGroup>

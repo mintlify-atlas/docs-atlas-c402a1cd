@@ -1,0 +1,97 @@
+---
+title: "Make VoIP calls from Odoo using click-to-call or numpad"
+description: "Two ways to initiate outbound calls in Voip OCA: click any green phone number in a partner view, or manually dial using the softphone numpad widget."
+---
+
+Voip OCA supports two methods for initiating outbound calls: click-to-call directly from partner records, and manual dialing through the softphone numpad. Both methods create a `voip.call` record and progress through the same call state lifecycle.
+
+## Method 1: Click-to-call
+
+Phone numbers on partner forms and other views that have the VoIP phone field widget installed are rendered in green. Clicking the number immediately initiates an outbound SIP call.
+
+<Steps>
+  <Step title="Navigate to a partner record">
+    Open any partner form, CRM lead, sale order, or other record that displays a phone number rendered in green by the `PhoneField` widget.
+  </Step>
+  <Step title="Click the green phone number">
+    Clicking the number triggers the VoIP service to place the call. The softphone widget opens automatically and shows the active call screen.
+  </Step>
+  <Step title="Wait for the called party to answer">
+    The call state is `calling` until the remote party answers. Once answered, the state transitions to `ongoing` and the elapsed-time counter starts.
+  </Step>
+</Steps>
+
+<Tip>
+  If the softphone widget is closed or folded when you click a number, it will open automatically so you can monitor and control the call.
+</Tip>
+
+## Method 2: Manual dial via numpad
+
+<Steps>
+  <Step title="Open the softphone widget">
+    Click the VoIP icon in the systray to open the widget.
+  </Step>
+  <Step title="Open the numpad">
+    Click the keyboard icon (bottom-left of the widget footer) to reveal the numpad panel.
+  </Step>
+  <Step title="Enter the phone number">
+    Type or click the digit keys to build the number. Use the backspace arrow to delete the last character. You can also type directly into the number field at the top of the numpad.
+  </Step>
+  <Step title="Place the call">
+    Click the phone icon (bottom-right of the widget footer) to initiate the call.
+  </Step>
+</Steps>
+
+## During a call
+
+Once a call reaches the `ongoing` state, the widget shows the active call view with the contact's name, avatar, phone number, and elapsed time. The following controls are available:
+
+| Control | Description |
+|---------|-------------|
+| **Transfer** | Opens a transfer input. Enter a destination number or extension to blind-transfer the call. |
+| **Mute** | Toggles microphone mute on your end. |
+| **Hold / Resume** | Places the call on hold (pause icon) or resumes it (play icon). |
+| **Numpad** | Opens the numpad to send DTMF tones (e.g., for IVR navigation). |
+| **Hang up** | Ends the call (red phone icon in the footer). The call state transitions to `terminated`. |
+
+## How call records are created
+
+Every outbound call creates a `voip.call` record via the `create_call` server method. If no `partner_id` is provided, Odoo searches for a partner whose `phone` or `mobile` field matches the dialed number:
+
+```python
+@api.model
+def create_call(self, values):
+    if not values.get("partner_id"):
+        values["partner_id"] = (
+            self.env["res.partner"]
+            .search(
+                [
+                    "|",
+                    ("phone", "=", values.get("phone_number")),
+                    ("mobile", "=", values.get("phone_number")),
+                ],
+                limit=1,
+            )
+            .id
+        )
+    return self.create(values).format_call()
+```
+
+Outbound calls are created with `type_call = "outgoing"` and an initial state of `"calling"`.
+
+## Call state lifecycle
+
+Outbound calls progress through the following states:
+
+```
+calling  →  ongoing  →  terminated
+```
+
+| State | Meaning |
+|-------|---------|
+| `calling` | SIP INVITE sent; waiting for the remote party to answer |
+| `ongoing` | Call accepted; `start_date` is set; elapsed timer is running |
+| `terminated` | Call ended normally; `end_date` is set |
+| `aborted` | Call failed before connecting (e.g., network error, busy signal) |
+
+Call duration is derived from `start_date` and `end_date` on the `voip.call` model.

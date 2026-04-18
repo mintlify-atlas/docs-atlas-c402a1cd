@@ -1,0 +1,80 @@
+---
+title: "Set up a PBX server record in Odoo voip_oca"
+description: "Create and configure a voip.pbx server record in Odoo, set the SIP domain and WebSocket URL, and choose between test and production environments."
+---
+
+A PBX server record (`voip.pbx`) stores the connection details that Odoo uses to communicate with your telephony provider. Each record defines a SIP domain, a WebSocket endpoint, and an environment mode. Users are then assigned to a PBX record through their preferences, which tells Odoo how to connect them to the SIP network at login.
+
+## PBX server fields
+
+| Field | Technical name | Default | Description |
+|---|---|---|---|
+| Name | `name` | — (required) | A label to identify this PBX configuration. |
+| Domain | `domain` | `localhost` | The SIP registrar hostname or IP address. |
+| WebSocket server | `ws_server` | `ws://localhost` | Full WebSocket URL used by SIP.js to connect. |
+| Environment | `mode` | `test` | `test` or `prod` — controls whether Odoo makes real SIP connections. |
+
+## Set up a PBX server record
+
+<Steps>
+  <Step title="Enable developer mode">
+    Go to **Settings → General Settings**, scroll to the bottom of the page, and click **Activate the developer mode**. This makes the **Technical** menu visible.
+  </Step>
+  <Step title="Open the PBX Servers list">
+    Navigate to **Settings → Technical → Discuss → PBX Servers**.
+  </Step>
+  <Step title="Create a new record">
+    Click **New** to open a blank PBX server form.
+  </Step>
+  <Step title="Fill in the connection details">
+    Enter a **Name**, then set the **Domain** and **WebSocket server** to match your telephony provider's values.
+
+    ```text
+    Name:             My PBX
+    Domain:           sip.example.com
+    WebSocket server: wss://sip.example.com:8089/ws
+    Environment:      Production
+    ```
+  </Step>
+  <Step title="Save the record">
+    Click **Save**. The PBX record is now available to assign to users.
+  </Step>
+</Steps>
+
+## Test vs production mode
+
+The **Environment** field controls how Odoo behaves when a user is connected to this PBX.
+
+<CardGroup cols={2}>
+  <Card title="Test mode" icon="flask">
+    Odoo never contacts the PBX server. SIP.js libraries are not loaded in the browser. Use this mode during setup or when you want to keep the VOIP UI visible without making real calls.
+  </Card>
+  <Card title="Production mode" icon="phone">
+    Odoo loads SIP.js and attempts a real WebSocket connection to the PBX on login. Calls are routed through your telephony infrastructure.
+  </Card>
+</CardGroup>
+
+<Note>
+  Even if the PBX record is set to **Production**, the session falls back to test mode if the user has no `voip_username` or `voip_password` configured. The effective mode is resolved at login time in `_voip_get_info()`.
+</Note>
+
+## Compatible providers
+
+`voip_oca` requires your PBX to support **WebRTC** and **WebSocket transport for SIP** ([RFC 7118](https://datatracker.ietf.org/doc/html/rfc7118)). The following providers are known to work:
+
+- **Zerovoz** — [zerovoz.com](https://zerovoz.com)
+- **Ringover**
+- **Axivox**
+- **OnSIP**
+
+Any provider that exposes a `wss://` or `ws://` SIP endpoint and supports WebRTC media should be compatible.
+
+<Tip>
+  If your PBX supports SIP over TCP but not WebSocket natively, you can place a reverse proxy (for example, nginx or Kamailio with the `websocket` module) in front of it to translate WebSocket connections into standard SIP TCP. Set the `ws_server` URL to point at the proxy.
+</Tip>
+
+## Limitations
+
+<Warning>
+  Only one PBX server configuration per user is supported. If a user is assigned multiple PBX records (for example via multi-company), behavior is undefined and only the first resolved record is used. Per-company VoIP configuration is not currently supported.
+</Warning>
